@@ -4,8 +4,24 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=()
   Strict-Transport-Security: max-age=31536000; includeSubDomains
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://enlkrucktzppkyxrljpr.supabase.co; connect-src 'self' https://enlkrucktzppkyxrljpr.supabase.co; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://enlkrucktzppkyxrljpr.supabase.co; connect-src 'self' https://enlkrucktzppkyxrljpr.supabase.co wss://enlkrucktzppkyxrljpr.supabase.co; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'
 
 /admin.html
+  X-Robots-Tag: noindex, nofollow
+  Cache-Control: no-store
+
+/login
+  X-Robots-Tag: noindex, nofollow
+  Cache-Control: no-store
+/register
+  X-Robots-Tag: noindex, nofollow
+  Cache-Control: no-store
+/forgot-password
+  X-Robots-Tag: noindex, nofollow
+  Cache-Control: no-store
+/portal/*
+  X-Robots-Tag: noindex, nofollow
+  Cache-Control: no-store
+/admin/*
   X-Robots-Tag: noindex, nofollow
   Cache-Control: no-store
