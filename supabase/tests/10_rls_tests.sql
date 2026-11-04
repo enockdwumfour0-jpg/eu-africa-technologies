@@ -312,3 +312,23 @@ select t.eq('suspended client sees nothing',
   t.n('select * from public.projects') + t.n('select * from public.documents') + t.n('select * from public.invoices') + t.n('select * from public.message_threads'), 0);
 select t.denied('suspended client cannot message', $q$ insert into public.message_threads(client_id, subject, created_by) select id, 'x', auth.uid() from public.clients $q$);
 select t.back();
+
+-- ---------------------------------------------------------------- settings
+select t.eq('registration queued a welcome notification', (select count(*) from public.notifications where type = 'registration_received'), 3);
+select t.act('b');
+select t.eq('client reads only the public company profile', t.n('select * from public.app_settings'), 1);
+select t.denied('client cannot change settings', $q$ update public.app_settings set value = '{}'::jsonb $q$);
+select t.back();
+select t.act('pm');
+select t.eq('staff read all settings', t.n('select * from public.app_settings'), 4);
+select t.denied('project manager cannot change settings', $q$ update public.app_settings set value = '{}'::jsonb $q$);
+select t.back();
+select t.act('adm');
+select t.allowed('admin updates company settings', $q$ update public.app_settings set value = jsonb_set(value, '{phone}', '"0240000000"') where key = 'company' $q$);
+select t.back();
+
+-- ------------------------------------------------- embeds respect RLS (008)
+select t.act('b');
+select t.eq('client B sees the pm name on own project (embed)', t.n('select m.user_id, p.full_name from public.project_members m join public.profiles p on p.id = m.user_id'), 1);
+select t.eq('client B sees no staff names for A projects', t.n($q$select 1 from public.project_members m join public.profiles p on p.id = m.user_id where m.project_id in (select id from public.projects where title = 'Project A')$q$), 0);
+select t.back();

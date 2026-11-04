@@ -11,7 +11,7 @@ export default function ProtectedRoute({ area, allow }: Props) {
 
   if (loading) return <div className="p-8 text-center text-sm text-gray-500">Loading…</div>
   if (!session) return <Navigate to="/login" state={{ from: loc.pathname }} replace />
-  if (status === 'suspended' || status === 'rejected') return <Navigate to="/login?reason=" replace />
+  if (status === 'suspended' || status === 'rejected') return <Navigate to={`/login?reason=${status}`} replace />
   if (status === 'pending') return <Navigate to="/login?reason=pending" replace />
   if (area === 'client' && role !== 'client') return <Navigate to={homeFor(role)} replace />
   if (area === 'staff' && !isStaff(role)) return <Navigate to={homeFor(role)} replace />
