@@ -56,14 +56,14 @@ create policy user_roles_select on public.user_roles for select to authenticated
 
 -- ---- clients
 create policy clients_select on public.clients for select to authenticated using (
-  profile_id = auth.uid()
+  id = private.my_client_id()   -- own row, and only while the account is active
   or private.has_role('super_admin','admin','support_officer','accountant')
   or (private.has_role('project_manager') and exists (
         select 1 from public.projects pr join public.project_members m on m.project_id = pr.id
         where pr.client_id = clients.id and m.user_id = auth.uid())));
 create policy clients_update on public.clients for update to authenticated
-  using (profile_id = auth.uid() or private.is_admin_or_above())
-  with check (profile_id = auth.uid() or private.is_admin_or_above());
+  using (id = private.my_client_id() or private.is_admin_or_above())
+  with check (id = private.my_client_id() or private.is_admin_or_above());
 
 -- ---- client_applications
 create policy apps_select on public.client_applications for select to authenticated
