@@ -193,7 +193,7 @@ begin
     values (new.id, left(new.raw_user_meta_data ->> 'company', 160),
             left(new.raw_user_meta_data ->> 'address', 300),
             left(new.raw_user_meta_data ->> 'notes', 1000));
-    -- queued for the "successful registration" email (sent by the send-emails function)
+    -- queued for the "successful registration" email (sent by the send-notification-email function)
     perform private.notify(new.id, 'registration_received', 'Registration received',
       'Thank you for registering. Please verify your email address. An administrator will then review and approve your account.', null);
   end if;
