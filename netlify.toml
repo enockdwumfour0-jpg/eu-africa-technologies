@@ -1,0 +1,49 @@
+[build]
+  command = "cd portal && npm ci && npm run build && cd .. && node scripts/assemble.mjs"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# --- Client portal and admin dashboard (single-page app) -------------------
+# force = true so /admin is served by the app and not by the legacy admin.html.
+[[redirects]]
+  from = "/login"
+  to = "/portal-app/index.html"
+  status = 200
+  force = true
+[[redirects]]
+  from = "/register"
+  to = "/portal-app/index.html"
+  status = 200
+  force = true
+[[redirects]]
+  from = "/forgot-password"
+  to = "/portal-app/index.html"
+  status = 200
+  force = true
+[[redirects]]
+  from = "/reset-password"
+  to = "/portal-app/index.html"
+  status = 200
+  force = true
+[[redirects]]
+  from = "/portal"
+  to = "/portal-app/index.html"
+  status = 200
+  force = true
+[[redirects]]
+  from = "/portal/*"
+  to = "/portal-app/index.html"
+  status = 200
+  force = true
+[[redirects]]
+  from = "/admin"
+  to = "/portal-app/index.html"
+  status = 200
+  force = true
+[[redirects]]
+  from = "/admin/*"
+  to = "/portal-app/index.html"
+  status = 200
+  force = true
