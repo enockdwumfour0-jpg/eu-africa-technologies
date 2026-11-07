@@ -1,15 +1,15 @@
 import { useState, type FormEvent } from 'react'
-import { Eye, EyeOff, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Eye, EyeOff, Pencil, Plus, Trash2, Undo2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { Async, Badge, EmptyState, Field, Modal, PageHeader, Table, Tabs, ok, useAction, useFeedback, useQuery } from '../../components/ui'
 import { clean, dateTime, ghs, num } from '../../lib/format'
 
 // Website content: enquiries, land listings and gallery that power the public site (eatl.co.com).
 export default function AdminWebsite() {
-  const [tab, setTab] = useState('enquiries')
-  return (<><PageHeader title="Website content" sub="Manage the enquiries, land listings and gallery shown on eatl.co.com." />
-    <Tabs value={tab} onChange={setTab} tabs={[{ id: 'enquiries', label: 'Enquiries' }, { id: 'lands', label: 'Land listings' }, { id: 'gallery', label: 'Gallery' }]} />
-    {tab === 'enquiries' ? <Enquiries /> : tab === 'lands' ? <Lands /> : <Gallery />}</>)
+  const [tab, setTab] = useState('text')
+  return (<><PageHeader title="Website content" sub="Edit the text on eatl.co.com and manage the enquiries, land listings and gallery shown there." />
+    <Tabs value={tab} onChange={setTab} tabs={[{ id: 'text', label: 'Page text' }, { id: 'enquiries', label: 'Enquiries' }, { id: 'lands', label: 'Land listings' }, { id: 'gallery', label: 'Gallery' }]} />
+    {tab === 'text' ? <PageText /> : tab === 'enquiries' ? <Enquiries /> : tab === 'lands' ? <Lands /> : <Gallery />}</>)
 }
 
 type Enq = { id: string; created_at: string; name: string; phone: string; country: string; topic: string; preferred_time: string | null; email: string | null; message: string | null; status: string; notes: string | null }
@@ -100,4 +100,63 @@ function AddPhoto({ count, onClose, onDone }: { count: number; onClose: () => vo
     <div className="grid grid-cols-2 gap-3"><Field label="Project status"><select className="input" value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>{['Proposed', 'In progress', 'Completed'].map((s) => <option key={s}>{s}</option>)}</select></Field><Field label="Type"><input className="input" maxLength={60} value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })} /></Field></div>
     <Field label="Photo"><input className="input" type="file" required accept="image/jpeg,image/png,image/webp" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></Field>
     <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy || !file}>{busy ? 'Uploading…' : 'Publish'}</button></div></form></Modal>
+}
+
+// ---------------------------------------------------------------- page text
+// Elements on the public pages carry data-cms="key". The text in the page file is the default;
+// a row in site_content overrides it. Saving here changes the live site immediately.
+const PAGES: [string, string, string][] = [
+  ['home', 'Home', 'index.html'], ['our-story', 'Our story', 'our-story.html'], ['mission-vision', 'Mission & vision', 'mission-vision.html'],
+  ['our-team', 'Our team', 'our-team.html'], ['our-partners', 'Partners', 'our-partners.html'], ['contact', 'Contact', 'contact.html'],
+  ['lands-for-sale', 'Lands for sale', 'lands-for-sale.html'], ['building-construction', 'Building & construction', 'building-construction.html'],
+  ['construction-projects', 'Construction projects', 'construction-projects.html'], ['block-factory', 'Block factory', 'block-factory.html'],
+  ['solar-installations', 'Solar installations', 'solar-installations.html'], ['solar-projects', 'Solar projects', 'solar-projects.html'], ['solar-village', 'Solar village', 'solar-village.html'],
+  ['diaspora-land', 'Diaspora: land', 'diaspora-land.html'], ['diaspora-building', 'Diaspora: building', 'diaspora-building.html'], ['diaspora-solar', 'Diaspora: solar', 'diaspora-solar.html'],
+  ['virtual-consultations', 'Virtual consultations', 'virtual-consultations.html'],
+]
+type TextItem = { key: string; tag: string; def: string }
+type Row = { key: string; value: string }
+
+function PageText() {
+  const [page, setPage] = useState('home'); const [find, setFind] = useState('')
+  const file = PAGES.find((p) => p[0] === page)![2]
+  const q = useQuery(async () => {
+    const [html, rows] = await Promise.all([
+      fetch('/' + file, { cache: 'no-cache' }).then((r) => { if (!r.ok) throw new Error('Could not load the page'); return r.text() }),
+      supabase.from('site_content').select('key, value').eq('page', page),
+    ])
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    const items: TextItem[] = [...doc.querySelectorAll('[data-cms]')].map((e) => ({ key: e.getAttribute('data-cms')!, tag: e.tagName.toLowerCase(), def: (e.textContent ?? '').trim() }))
+    return { items, over: Object.fromEntries((ok(rows) as Row[]).map((r) => [r.key, r.value])) as Record<string, string> }
+  }, [page])
+  return (<>
+    <div className="mb-3 flex flex-wrap items-center gap-2">
+      <select className="input !w-auto" value={page} onChange={(e) => setPage(e.target.value)}>{PAGES.map((p) => <option key={p[0]} value={p[0]}>{p[1]}</option>)}</select>
+      <input className="input !w-auto min-w-[14rem]" placeholder="Search this page's text" value={find} onChange={(e) => setFind(e.target.value)} />
+      <a className="btn-ghost text-sm" href={'https://eatl.co.com/' + (page === 'home' ? '' : file)} target="_blank" rel="noreferrer">View page</a>
+    </div>
+    <p className="mb-4 max-w-3xl text-sm text-gray-600">Change a heading or paragraph and press Save. It appears on the website straight away (visitors may need to refresh). Plain text only. Reset returns it to the original wording.</p>
+    <Async q={q} empty={(d) => d.items.length === 0 && <EmptyState title="No editable text on this page" text="Choose another page." />}>{({ items, over }) => (
+      <div className="space-y-3">{items.filter((i) => !find || (over[i.key] ?? i.def).toLowerCase().includes(find.toLowerCase())).map((i) => <TextRow key={page + i.key} item={i} page={page} saved={over[i.key]} reload={q.reload} />)}</div>
+    )}</Async>
+  </>)
+}
+
+function TextRow({ item, page, saved, reload }: { item: TextItem; page: string; saved?: string; reload: () => void }) {
+  const current = saved ?? item.def; const [v, setV] = useState(current); const { run, busy } = useAction()
+  const dirty = v.trim() !== current.trim()
+  const save = () => run(async () => {
+    const value = clean(v)
+    if (!value) throw new Error('Text cannot be empty')
+    if (value === item.def) ok(await supabase.from('site_content').delete().eq('key', item.key))
+    else ok(await supabase.from('site_content').upsert({ key: item.key, page, value }))
+  }, 'Saved to the website').then(reload)
+  const reset = () => run(async () => { ok(await supabase.from('site_content').delete().eq('key', item.key)) }, 'Restored original text').then(() => { setV(item.def); reload() })
+  return (<div className="card p-3">
+    <div className="mb-1 flex items-center gap-2 text-xs text-gray-500"><span className="rounded bg-gray-100 px-1.5 py-0.5 font-mono uppercase">{item.tag}</span>{saved !== undefined && <Badge s="edited" />}</div>
+    <textarea className="input" rows={item.tag === 'p' ? Math.min(8, Math.max(2, Math.ceil(v.length / 90))) : 2} maxLength={2000} value={v} onChange={(e) => setV(e.target.value)} />
+    <div className="mt-2 flex items-center justify-end gap-2">
+      {saved !== undefined && <button className="btn-ghost !px-2 !py-1 text-xs" disabled={busy} onClick={reset}><Undo2 size={13} />Reset to original</button>}
+      <button className="btn-primary !px-3 !py-1 text-xs" disabled={busy || !dirty || !v.trim()} onClick={save}>Save</button>
+    </div></div>)
 }
