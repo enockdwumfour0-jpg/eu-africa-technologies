@@ -38,7 +38,7 @@ The project already exists (`enlkrucktzppkyxrljpr`). In the Supabase dashboard:
 
 ## 2. Run the SQL migrations
 
-Files are in `supabase/migrations/`, numbered 001 to 009, and must run in order. They only **add** objects; the
+Files are in `supabase/migrations/`, numbered 001 to 010, and must run in order. They only **add** objects; the
 existing `admins`, `enquiries`, `land_listings` and `gallery_items` tables and the current website keep working.
 
 - With the CLI: `supabase link --project-ref enlkrucktzppkyxrljpr` then `supabase db push`.
@@ -47,7 +47,7 @@ existing `admins`, `enquiries`, `land_listings` and `gallery_items` tables and t
 Afterwards open **Advisors > Security** and confirm there are no warnings about missing RLS.
 
 To re-check permissions at any time on a scratch Postgres: `supabase/tests/run.sh <socket-dir> <port>`.
-It applies every migration and runs 129 checks (for example, one client cannot read another client's projects,
+It applies every migration and runs 192 checks (for example, one client cannot read another client's projects,
 documents, messages or invoices; nobody can edit their own role; the ledger cannot be edited).
 
 ## 3. Environment variables
@@ -118,7 +118,14 @@ Every other staff member is created from **Admin > Settings > Staff** (they get 
    view balances and the ledger, export CSV/PDF. Every change is written to the audit log.
 8. **Reports** (CSV and PDF) and **Settings** (company details, notification toggles, email sender, role matrix).
 
+### Account credit (advance deposits)
+
+When a client pays in advance, the accountant records it under **Finance > Account credit > Record deposit**.
+The money is held as a credit balance for that client (ledger account 2100, a liability). It can only be applied to
+that client's own invoices (**Apply credit** on an open invoice). Reversing a credit-applied payment returns the
+money to the credit balance. Clients see their balance, deposit receipts and movements under **Payments > Account credit**.
+It is not a wallet: it cannot be withdrawn or transferred, and nothing is connected to a payment provider.
+
 ## Not included in this version
 
-Online payment gateways, wallets, withdrawals and transfers. Payments are **recorded** by the accountant against
-invoices. Add a gateway only after the company's payment model and provider are approved.
+Online payment gateways, stored-value wallets, withdrawals and transfers. Payments and deposits are **recorded** by the accountant. Add a gateway only after the company's payment model and provider are approved.

@@ -1,13 +1,14 @@
 import { useMemo, useState, type FormEvent } from 'react'
-import { Ban, Banknote, Download, FileCheck2, Plus, Trash2, Undo2 } from 'lucide-react'
+import { Ban, Banknote, Download, FileCheck2, Plus, Trash2, Undo2, Wallet } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { Async, Badge, Field, Modal, PageHeader, SearchBox, Select, StatCard, Table, Tabs, matches, ok, useAction, useFeedback, useQuery } from '../../components/ui'
 import { clean, date, ghs, label, num } from '../../lib/format'
 import { exportCsv, exportPdf, receiptPdf, type Col } from '../../lib/export'
-import type { Client, Invoice, LedgerEntry, Payment } from '../../lib/types'
+import type { Client, Deposit, Invoice, LedgerEntry, Payment } from '../../lib/types'
 
 type Inv = Invoice & { clients: { company_name: string | null; profiles: { full_name: string } } | null }
 type Pay = Payment & { clients: { profiles: { full_name: string } } | null }
+type Dep = Deposit & { clients: { company_name: string | null; profiles: { full_name: string } } | null }
 type Led = LedgerEntry & { clients: { profiles: { full_name: string } } | null }
 const cname = (c: { company_name?: string | null; profiles?: { full_name: string } } | null | undefined) => c?.profiles?.full_name || c?.company_name || '—'
 const owed = (i: Invoice) => Number(i.total) - Number(i.amount_paid)
@@ -15,30 +16,38 @@ const owed = (i: Invoice) => Number(i.total) - Number(i.amount_paid)
 export default function AdminFinance() {
   const [tab, setTab] = useState('invoices')
   const q = useQuery(async () => {
-    const [i, p, l, c, set] = await Promise.all([
+    const [i, p, l, c, set, dp] = await Promise.all([
       supabase.from('invoices').select('*, clients(company_name, profiles(full_name))').order('created_at', { ascending: false }),
       supabase.from('payments').select('*, invoices(number), clients(profiles(full_name))').order('paid_at', { ascending: false }),
       supabase.from('ledger_entries').select('*, ledger_accounts(code, name), clients(profiles(full_name))').order('created_at', { ascending: true }),
       supabase.from('clients').select('id, company_name, profiles!inner(full_name, status)').eq('profiles.status', 'active'),
       supabase.from('app_settings').select('value').eq('key', 'system').maybeSingle(),
+      supabase.from('deposits').select('*, clients(company_name, profiles(full_name))').order('paid_at', { ascending: false }),
     ])
-    return { inv: ok(i) as unknown as Inv[], pay: ok(p) as unknown as Pay[], led: ok(l) as unknown as Led[], clients: ok(c) as unknown as (Client & { profiles: { full_name: string } })[], sys: (set.data?.value ?? { invoice_due_days: 14, tax_rate_percent: 0 }) as { invoice_due_days: number; tax_rate_percent: number } }
+    return { dep: ok(dp) as unknown as Dep[], inv: ok(i) as unknown as Inv[], pay: ok(p) as unknown as Pay[], led: ok(l) as unknown as Led[], clients: ok(c) as unknown as (Client & { profiles: { full_name: string } })[], sys: (set.data?.value ?? { invoice_due_days: 14, tax_rate_percent: 0 }) as { invoice_due_days: number; tax_rate_percent: number } }
   }, [])
   return (
     <>
       <PageHeader title="Finance" sub="Invoices, payments, receipts and the client ledger. Every transaction is audited." />
       <Async q={q}>{(d) => {
         const outstanding = d.inv.filter((i) => ['issued', 'partially_paid', 'overdue'].includes(i.status)).reduce((s, i) => s + owed(i), 0)
-        const received = d.pay.filter((p) => p.status === 'confirmed').reduce((s, p) => s + Number(p.amount), 0)
+        // Cash actually received: real payments plus deposits. Credit applied to an invoice is not new cash.
+        const received = d.pay.filter((p) => p.status === 'confirmed' && p.method !== 'account_credit').reduce((s, p) => s + Number(p.amount), 0)
+          + d.dep.filter((x) => x.status === 'confirmed').reduce((s, x) => s + Number(x.amount), 0)
+        const credit: Record<string, number> = {}
+        d.led.forEach((e) => { if (e.account_code === '2100' && e.client_id) credit[e.client_id] = Math.round(((credit[e.client_id] ?? 0) + Number(e.credit) - Number(e.debit)) * 100) / 100 })
+        const held = Object.values(credit).reduce((s, v) => s + v, 0)
         return (<>
-          <div className="mb-5 grid gap-3 sm:grid-cols-3">
+          <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard label="Outstanding" value={ghs(outstanding)} icon={<Banknote size={20} />} tone={outstanding ? 'red' : 'green'} />
-            <StatCard label="Received" value={ghs(received)} icon={<FileCheck2 size={20} />} />
+            <StatCard label="Cash received" value={ghs(received)} icon={<FileCheck2 size={20} />} />
+            <StatCard label="Client credit held" value={ghs(held)} icon={<Wallet size={20} />} tone="grey" />
             <StatCard label="Overdue invoices" value={d.inv.filter((i) => i.status === 'overdue').length} icon={<Ban size={20} />} tone="gold" />
           </div>
-          <Tabs value={tab} onChange={setTab} tabs={[{ id: 'invoices', label: 'Invoices', count: d.inv.length }, { id: 'payments', label: 'Payments', count: d.pay.length }, { id: 'outstanding', label: 'Outstanding' }, { id: 'ledger', label: 'Ledger' }, { id: 'statements', label: 'Statements' }]} />
-          {tab === 'invoices' && <Invoices d={d} reload={q.reload} />}
+          <Tabs value={tab} onChange={setTab} tabs={[{ id: 'invoices', label: 'Invoices', count: d.inv.length }, { id: 'payments', label: 'Payments', count: d.pay.length }, { id: 'credit', label: 'Account credit', count: d.dep.length }, { id: 'outstanding', label: 'Outstanding' }, { id: 'ledger', label: 'Ledger' }, { id: 'statements', label: 'Statements' }]} />
+          {tab === 'invoices' && <Invoices d={{ ...d, credit }} reload={q.reload} />}
           {tab === 'payments' && <Payments pay={d.pay} reload={q.reload} />}
+          {tab === 'credit' && <Credit dep={d.dep} credit={credit} clients={d.clients} reload={q.reload} />}
           {tab === 'outstanding' && <Outstanding inv={d.inv} />}
           {tab === 'ledger' && <Ledger led={d.led} />}
           {tab === 'statements' && <Statements led={d.led} clients={d.clients} />}
@@ -48,9 +57,9 @@ export default function AdminFinance() {
   )
 }
 
-type D = { inv: Inv[]; clients: (Client & { profiles: { full_name: string } })[]; sys: { invoice_due_days: number; tax_rate_percent: number } }
+type D = { inv: Inv[]; clients: (Client & { profiles: { full_name: string } })[]; sys: { invoice_due_days: number; tax_rate_percent: number }; credit: Record<string, number> }
 function Invoices({ d, reload }: { d: D; reload: () => void }) {
-  const [s, setS] = useState(''); const [st, setSt] = useState('all'); const [form, setForm] = useState<Inv | 'new' | null>(null); const [pay, setPay] = useState<Inv | null>(null)
+  const [s, setS] = useState(''); const [st, setSt] = useState('all'); const [form, setForm] = useState<Inv | 'new' | null>(null); const [pay, setPay] = useState<Inv | null>(null); const [apply, setApply] = useState<Inv | null>(null)
   const { run } = useAction(); const { confirm } = useFeedback()
   const rpc = (fn: string, args: Record<string, unknown>, msg: string) => run(async () => { ok(await supabase.rpc(fn, args)) }, msg).then(() => reload())
   const cols: Col<Inv>[] = [{ header: 'Invoice', get: (i) => i.number }, { header: 'Client', get: (i) => cname(i.clients) }, { header: 'Issued', get: (i) => date(i.issue_date) }, { header: 'Due', get: (i) => date(i.due_date) }, { header: 'Total', get: (i) => ghs(i.total) }, { header: 'Paid', get: (i) => ghs(i.amount_paid) }, { header: 'Balance', get: (i) => ghs(owed(i)) }, { header: 'Status', get: (i) => label(i.status) }]
@@ -66,11 +75,13 @@ function Invoices({ d, reload }: { d: D; reload: () => void }) {
           <button className="btn-primary !px-2 !py-1 text-xs" onClick={async () => { if (await confirm({ title: `Issue ${i.number}?`, text: 'The client is notified and the invoice is locked.', action: 'Issue' })) rpc('issue_invoice', { p_invoice: i.id }, 'Invoice issued') }}>Issue</button>
           <button className="p-1 text-gray-500 hover:text-red-600" aria-label="Delete draft" onClick={async () => { if (await confirm({ title: `Delete draft ${i.number}?`, action: 'Delete', danger: true })) run(async () => { ok(await supabase.from('invoices').delete().eq('id', i.id)) }, 'Draft deleted').then(reload) }}><Trash2 size={14} /></button></>}
         {['issued', 'partially_paid', 'overdue'].includes(i.status) && <><button className="btn-primary !px-2 !py-1 text-xs" onClick={() => setPay(i)}>Record payment</button>
+          {(d.credit[i.client_id] ?? 0) > 0 && <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => setApply(i)}><Wallet size={13} />Apply credit</button>}
           {Number(i.amount_paid) === 0 && <button className="btn-ghost !px-2 !py-1 text-xs" onClick={async () => { if (await confirm({ title: `Void ${i.number}?`, text: 'A reversing ledger entry is posted.', action: 'Void', danger: true })) rpc('void_invoice', { p_invoice: i.id }, 'Invoice voided') }}>Void</button>}</>}
       </div> },
     ]} />
     {form && <InvoiceForm inv={form === 'new' ? null : form} d={d} onClose={() => setForm(null)} onDone={() => { setForm(null); reload() }} />}
     {pay && <PayForm inv={pay} onClose={() => setPay(null)} onDone={() => { setPay(null); reload() }} />}
+    {apply && <ApplyCreditForm inv={apply} available={d.credit[apply.client_id] ?? 0} onClose={() => setApply(null)} onDone={() => { setApply(null); reload() }} />}
   </>)
 }
 
@@ -156,4 +167,47 @@ function Statements({ led, clients }: { led: Led[]; clients: (Client & { profile
     {cid && <div className="ml-auto flex gap-2 pb-0.5"><button className="btn-ghost" onClick={() => exportCsv(`statement-${name}`, cols, rows)}>CSV</button><button className="btn-primary" onClick={() => exportPdf(`statement-${name}`, 'Account statement', cols, rows, `${name} · opening balance ${ghs(opening)} · closing ${ghs(bal)}`)}>PDF</button></div>}</div>
     {!cid ? <p className="py-8 text-center text-sm text-gray-500">Choose a client to generate a statement.</p> : <><p className="mb-2 text-sm text-gray-600">Opening balance <b>{ghs(opening)}</b> · Closing balance <b>{ghs(bal)}</b></p>
       <Table rows={rows} cols={[{ header: 'Date', cell: (e) => date(e.created_at) }, { header: 'Description', cell: (e) => e.description }, { header: 'Charges', cell: (e) => (Number(e.debit) ? ghs(e.debit) : '') }, { header: 'Payments', cell: (e) => (Number(e.credit) ? ghs(e.credit) : '') }, { header: 'Balance', cell: (e) => <b>{ghs(e.balance)}</b> }]} /></>}</>)
+}
+
+function ApplyCreditForm({ inv, available, onClose, onDone }: { inv: Inv; available: number; onClose: () => void; onDone: () => void }) {
+  const max = Math.min(available, owed(inv)); const [amount, setAmount] = useState(String(max)); const { run, busy } = useAction()
+  const submit = async (e: FormEvent) => { e.preventDefault(); const r = await run(async () => { ok(await supabase.rpc('apply_credit', { p_invoice: inv.id, p_amount: num(amount) })) }, 'Credit applied'); if (r) onDone() }
+  return <Modal title={`Apply account credit · ${inv.number}`} onClose={onClose} small><form onSubmit={submit} className="space-y-4">
+    <p className="text-sm text-gray-600">Client: <b>{cname(inv.clients)}</b><br />Invoice balance: <b>{ghs(owed(inv))}</b> · Credit available: <b>{ghs(available)}</b></p>
+    <Field label="Amount to apply (GHS)"><input className="input" type="number" required min="0.01" max={max} step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
+    <p className="text-xs text-gray-500">The credit is moved onto this invoice and a receipt is created. The client is notified.</p>
+    <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy || num(amount) <= 0 || num(amount) > max + 0.001}>Apply credit</button></div></form></Modal>
+}
+
+function Credit({ dep, credit, clients, reload }: { dep: Dep[]; credit: Record<string, number>; clients: (Client & { profiles: { full_name: string } })[]; reload: () => void }) {
+  const [s, setS] = useState(''); const [form, setForm] = useState<string | null>(null); const [rev, setRev] = useState<Dep | null>(null); const [reason, setReason] = useState(''); const { run } = useAction()
+  const holders = clients.filter((c) => (credit[c.id] ?? 0) !== 0 && matches(s, c.profiles.full_name, c.company_name))
+  const rows = dep.filter((x) => matches(s, x.receipt_number, cname(x.clients), x.reference))
+  const cols: Col<Dep>[] = [{ header: 'Receipt', get: (x) => x.receipt_number }, { header: 'Date', get: (x) => date(x.paid_at) }, { header: 'Client', get: (x) => cname(x.clients) }, { header: 'Method', get: (x) => label(x.method) }, { header: 'Reference', get: (x) => x.reference ?? '' }, { header: 'Amount', get: (x) => ghs(x.amount) }, { header: 'Status', get: (x) => label(x.status) }]
+  return (<>
+    <p className="mb-3 max-w-3xl text-sm text-gray-600">Advance payments are held as account credit. The client cannot withdraw it or transfer it; you apply it to their invoices. Record a deposit only after the money has been received.</p>
+    <div className="mb-3 flex flex-wrap items-center gap-2"><SearchBox value={s} onChange={setS} placeholder="Search client or receipt" />
+      <div className="ml-auto flex gap-2"><button className="btn-ghost" onClick={() => exportCsv('deposits', cols, rows)}>CSV</button><button className="btn-ghost" onClick={() => exportPdf('deposits', 'Deposits received', cols, rows)}>PDF</button><button className="btn-primary" onClick={() => setForm('')}><Plus size={15} />Record deposit</button></div></div>
+    <h3 className="mb-2 text-sm font-semibold text-gray-700">Credit balances</h3>
+    <Table rows={holders} cols={[{ header: 'Client', cell: (c) => c.profiles.full_name }, { header: 'Credit available', cell: (c) => <b>{ghs(credit[c.id] ?? 0)}</b> }, { header: '', cell: (c) => <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => setForm(c.id)}>Add deposit</button> }]} />
+    <h3 className="mb-2 mt-6 text-sm font-semibold text-gray-700">Deposits</h3>
+    <Table rows={rows} cols={[{ header: 'Receipt', cell: (x) => <b>{x.receipt_number}</b> }, { header: 'Date', cell: (x) => date(x.paid_at) }, { header: 'Client', cell: (x) => cname(x.clients) }, { header: 'Method', cell: (x) => label(x.method) }, { header: 'Amount', cell: (x) => ghs(x.amount) }, { header: 'Status', cell: (x) => <Badge s={x.status} /> },
+      { header: '', cell: (x) => <div className="flex gap-1"><button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => receiptPdf({ number: x.receipt_number, client: cname(x.clients), invoice: 'Account credit deposit', amount: ghs(x.amount), method: x.method, date: date(x.paid_at), reference: x.reference })}><Download size={13} />Receipt</button>
+        {x.status === 'confirmed' && <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => { setRev(x); setReason('') }}><Undo2 size={13} />Reverse</button>}</div> }]} />
+    {form !== null && <DepositForm clients={clients} start={form} onClose={() => setForm(null)} onDone={() => { setForm(null); reload() }} />}
+    {rev && <Modal title={`Reverse ${rev.receipt_number}`} onClose={() => setRev(null)} small><p className="mb-3 text-sm text-gray-600">Only possible while the client still has this much credit unused. If it was already applied to invoices, reverse those payments first.</p><Field label="Reason (recorded in the audit trail)"><textarea className="input" rows={3} maxLength={300} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
+      <div className="mt-4 flex justify-end gap-2"><button className="btn-ghost" onClick={() => setRev(null)}>Cancel</button><button className="btn-danger" disabled={!reason.trim()} onClick={async () => { const r = await run(async () => { ok(await supabase.rpc('reverse_deposit', { p_deposit: rev.id, p_reason: clean(reason) })) }, 'Deposit reversed'); if (r) { setRev(null); reload() } }}>Reverse deposit</button></div></Modal>}
+  </>)
+}
+
+function DepositForm({ clients, start, onClose, onDone }: { clients: (Client & { profiles: { full_name: string } })[]; start: string; onClose: () => void; onDone: () => void }) {
+  const [client, setClient] = useState(start); const [amount, setAmount] = useState(''); const [method, setMethod] = useState('bank_transfer'); const [ref, setRef] = useState(''); const [paid, setPaid] = useState(new Date().toISOString().slice(0, 10)); const { run, busy } = useAction()
+  const submit = async (e: FormEvent) => { e.preventDefault(); const r = await run(async () => { ok(await supabase.rpc('record_deposit', { p_client: client, p_amount: num(amount), p_method: method, p_reference: clean(ref) || null, p_paid_at: paid })) }, 'Deposit recorded'); if (r) onDone() }
+  return <Modal title="Record deposit" onClose={onClose} small><form onSubmit={submit} className="space-y-4">
+    <Field label="Client"><select className="input" required value={client} onChange={(e) => setClient(e.target.value)}><option value="">Select client…</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.profiles.full_name}</option>)}</select></Field>
+    <Field label="Amount (GHS)"><input className="input" type="number" required min="0.01" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
+    <div className="grid gap-4 sm:grid-cols-2"><Field label="Method"><select className="input" value={method} onChange={(e) => setMethod(e.target.value)}>{['bank_transfer', 'mobile_money', 'cash', 'cheque', 'other'].map((m) => <option key={m} value={m}>{label(m)}</option>)}</select></Field><Field label="Date received"><input className="input" type="date" required max={new Date().toISOString().slice(0, 10)} value={paid} onChange={(e) => setPaid(e.target.value)} /></Field></div>
+    <Field label="Reference"><input className="input" maxLength={120} value={ref} onChange={(e) => setRef(e.target.value)} /></Field>
+    <p className="text-xs text-gray-500">This records money already received. It is held as the client's account credit and a receipt is created. No money is moved by the portal.</p>
+    <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy || !client || num(amount) <= 0}>Record deposit</button></div></form></Modal>
 }

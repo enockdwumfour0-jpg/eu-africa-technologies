@@ -4,40 +4,44 @@ import { supabase } from '../../lib/supabase'
 import { Async, Badge, PageHeader, StatCard, Table, Tabs, ok, useQuery } from '../../components/ui'
 import { date, ghs, label } from '../../lib/format'
 import { exportCsv, exportPdf, receiptPdf, type Col } from '../../lib/export'
-import type { Invoice, LedgerEntry, Payment } from '../../lib/types'
+import type { Deposit, Invoice, LedgerEntry, Payment } from '../../lib/types'
 
 export default function ClientPayments() {
   const [tab, setTab] = useState('invoices')
   const q = useQuery(async () => {
-    const [i, p, l, me] = await Promise.all([
+    const [i, p, l, me, dp] = await Promise.all([
       supabase.from('invoices').select('*').order('created_at', { ascending: false }),
       supabase.from('payments').select('*, invoices(number)').order('paid_at', { ascending: false }),
       supabase.from('ledger_entries').select('*, ledger_accounts(code, name)').order('created_at', { ascending: true }),
       supabase.from('profiles').select('full_name').maybeSingle(),
+      supabase.from('deposits').select('*').order('paid_at', { ascending: false }),
     ])
-    return { inv: ok(i) as Invoice[], pay: ok(p) as unknown as Payment[], led: ok(l) as unknown as LedgerEntry[], name: (me.data?.full_name as string) ?? '' }
+    return { inv: ok(i) as Invoice[], pay: ok(p) as unknown as Payment[], led: ok(l) as unknown as LedgerEntry[], dep: ok(dp) as Deposit[], name: (me.data?.full_name as string) ?? '' }
   }, [])
   return (
     <>
       <PageHeader title="Payments" sub="Your invoices, payments and account ledger. Payments are recorded by EU-AFRIC once received." />
-      <Async q={q}>{({ inv, pay, led, name }) => {
+      <Async q={q}>{({ inv, pay, led, dep, name }) => {
         const owing = inv.filter((i) => ['issued', 'partially_paid', 'overdue'].includes(i.status)).reduce((s, i) => s + Number(i.total) - Number(i.amount_paid), 0)
-        const paid = pay.filter((p) => p.status === 'confirmed').reduce((s, p) => s + Number(p.amount), 0)
+        const paid = pay.filter((p) => p.status === 'confirmed' && p.method !== 'account_credit').reduce((s, p) => s + Number(p.amount), 0)
         // Running balance on the receivables account (debits raise what you owe, credits reduce it)
         let bal = 0
-        const stmt = led.filter((e) => e.ledger_accounts?.code === '1100').map((e) => ({ ...e, balance: (bal += Number(e.debit) - Number(e.credit)) }))
+        const stmt = led.filter((e) => e.account_code === '1100').map((e) => ({ ...e, balance: (bal += Number(e.debit) - Number(e.credit)) }))
+        let cb = 0
+        const cred = led.filter((e) => e.account_code === '2100').map((e) => ({ ...e, balance: (cb += Number(e.credit) - Number(e.debit)) }))
         const stmtCols: Col<(typeof stmt)[number]>[] = [
           { header: 'Date', get: (e) => date(e.created_at) }, { header: 'Description', get: (e) => e.description },
           { header: 'Charges', get: (e) => ghs(e.debit) }, { header: 'Payments', get: (e) => ghs(e.credit) }, { header: 'Balance', get: (e) => ghs(e.balance) },
         ]
         return (
           <div className="space-y-5">
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard label="Outstanding balance" value={ghs(owing)} icon={<Wallet size={20} />} tone={owing > 0 ? 'red' : 'green'} />
               <StatCard label="Total paid" value={ghs(paid)} icon={<Download size={20} />} />
+              <StatCard label="Account credit" value={ghs(Math.round(cb * 100) / 100)} icon={<Wallet size={20} />} tone="grey" />
               <StatCard label="Invoices" value={inv.length} tone="grey" icon={<FileDown size={20} />} />
             </div>
-            <Tabs value={tab} onChange={setTab} tabs={[{ id: 'invoices', label: 'Invoices', count: inv.length }, { id: 'payments', label: 'Payments & receipts', count: pay.length }, { id: 'statement', label: 'Account statement' }]} />
+            <Tabs value={tab} onChange={setTab} tabs={[{ id: 'invoices', label: 'Invoices', count: inv.length }, { id: 'payments', label: 'Payments & receipts', count: pay.length }, { id: 'credit', label: 'Account credit', count: dep.length }, { id: 'statement', label: 'Account statement' }]} />
             {tab === 'invoices' && <Table rows={inv} cols={[
               { header: 'Invoice', cell: (i) => <b>{i.number}</b> }, { header: 'Issued', cell: (i) => date(i.issue_date) }, { header: 'Due', cell: (i) => date(i.due_date) },
               { header: 'Total', cell: (i) => ghs(i.total) }, { header: 'Paid', cell: (i) => ghs(i.amount_paid) }, { header: 'Balance', cell: (i) => ghs(Number(i.total) - Number(i.amount_paid)) }, { header: 'Status', cell: (i) => <Badge s={i.status} /> },
@@ -47,6 +51,13 @@ export default function ClientPayments() {
               { header: 'Method', cell: (p) => label(p.method) }, { header: 'Amount', cell: (p) => ghs(p.amount) }, { header: 'Status', cell: (p) => <Badge s={p.status} /> },
               { header: '', cell: (p) => p.status === 'confirmed' && <button className="btn-ghost !py-1 text-xs" onClick={() => receiptPdf({ number: p.receipt_number, client: name, invoice: p.invoices?.number ?? '', amount: ghs(p.amount), method: p.method, date: date(p.paid_at), reference: p.reference })}><Download size={13} />Receipt</button> },
             ]} />}
+            {tab === 'credit' && <>
+              <p className="mb-3 max-w-2xl text-sm text-gray-600">Advance payments you have made are held here as credit. EU-AFRIC applies it to your invoices. It cannot be withdrawn or transferred.</p>
+              <Table rows={dep} cols={[{ header: 'Receipt', cell: (x) => <b>{x.receipt_number}</b> }, { header: 'Date', cell: (x) => date(x.paid_at) }, { header: 'Method', cell: (x) => label(x.method) }, { header: 'Amount', cell: (x) => ghs(x.amount) }, { header: 'Status', cell: (x) => <Badge s={x.status} /> },
+                { header: '', cell: (x) => x.status === 'confirmed' && <button className="btn-ghost !py-1 text-xs" onClick={() => receiptPdf({ number: x.receipt_number, client: name, invoice: 'Account credit deposit', amount: ghs(x.amount), method: x.method, date: date(x.paid_at), reference: x.reference })}><Download size={13} />Receipt</button> }]} />
+              <h3 className="mb-2 mt-5 text-sm font-semibold text-gray-700">Credit movements</h3>
+              <Table rows={cred} cols={[{ header: 'Date', cell: (e) => date(e.created_at) }, { header: 'Description', cell: (e) => e.description }, { header: 'Added', cell: (e) => (Number(e.credit) ? ghs(e.credit) : '') }, { header: 'Used', cell: (e) => (Number(e.debit) ? ghs(e.debit) : '') }, { header: 'Balance', cell: (e) => <b>{ghs(e.balance)}</b> }]} />
+            </>}
             {tab === 'statement' && (
               <>
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-gray-600">Closing balance: <b>{ghs(bal)}</b></p>

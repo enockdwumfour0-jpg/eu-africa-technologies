@@ -51,8 +51,12 @@ export type Payment = {
   reference: string | null; paid_at: string; status: 'confirmed' | 'reversed'; reversal_reason: string | null
   created_at: string; invoices?: { number: string } | null; clients?: Client
 }
+export type Deposit = {
+  id: Id; receipt_number: string; client_id: Id; amount: number; method: string; reference: string | null
+  paid_at: string; status: 'confirmed' | 'reversed'; reversal_reason: string | null; created_at: string
+}
 export type LedgerEntry = {
-  id: Id; entry_group: Id; account_id: Id; client_id: Id | null; invoice_id: Id | null; payment_id: Id | null
+  id: Id; entry_group: Id; account_id: Id; account_code: string; client_id: Id | null; invoice_id: Id | null; payment_id: Id | null; deposit_id: Id | null
   debit: number; credit: number; description: string; created_at: string; ledger_accounts?: { code: string; name: string } | null
 }
 export type AuditLog = { id: number; actor_id: Id | null; action: string; table_name: string; record_id: string | null; new_data: unknown; created_at: string }

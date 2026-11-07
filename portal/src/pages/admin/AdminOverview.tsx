@@ -13,19 +13,21 @@ export default function AdminOverview() {
   const fin = role === 'super_admin' || role === 'admin' || role === 'accountant'
   const ops = role === 'super_admin' || role === 'admin' || role === 'support_officer'
   const q = useQuery(async () => {
-    const [clients, apps, projects, reqs, inv, pay, acts] = await Promise.all([
+    const [clients, apps, projects, reqs, inv, pay, acts, dep] = await Promise.all([
       ops || fin ? supabase.from('clients').select('id', { count: 'exact', head: true }) : null,
       ops ? supabase.from('client_applications').select('id', { count: 'exact', head: true }).eq('status', 'pending') : null,
       supabase.from('projects').select('id, status').eq('archived', false),
       ops ? supabase.from('project_requests').select('id', { count: 'exact', head: true }).in('status', ['submitted', 'under_review']) : null,
       fin ? supabase.from('invoices').select('total, amount_paid').in('status', ['issued', 'partially_paid', 'overdue']) : null,
-      fin ? supabase.from('payments').select('amount, paid_at').eq('status', 'confirmed') : null,
+      fin ? supabase.from('payments').select('amount, paid_at').eq('status', 'confirmed').neq('method', 'account_credit') : null,
       supabase.from('project_updates').select('id, title, created_at, projects(title)').order('created_at', { ascending: false }).limit(8),
+      fin ? supabase.from('deposits').select('amount, paid_at').eq('status', 'confirmed') : null,
     ])
     const p = ok(projects) as { status: string }[]
     const byStatus = Object.entries(p.reduce<Record<string, number>>((a, x) => ({ ...a, [x.status]: (a[x.status] ?? 0) + 1 }), {})).map(([name, value]) => ({ name, value }))
     const owing = inv ? (ok(inv) as { total: number; amount_paid: number }[]).reduce((s, i) => s + Number(i.total) - Number(i.amount_paid), 0) : 0
-    const payments = pay ? (ok(pay) as { amount: number; paid_at: string }[]) : []
+    // cash received = real payments + deposits (credit applied to invoices is not new cash)
+    const payments = [...(pay ? (ok(pay) as { amount: number; paid_at: string }[]) : []), ...(dep ? (ok(dep) as { amount: number; paid_at: string }[]) : [])]
     const months: { m: string; total: number }[] = []
     for (let i = 5; i >= 0; i--) {
       const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i)
