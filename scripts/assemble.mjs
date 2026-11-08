@@ -18,4 +18,8 @@ for (const name of readdirSync('.')) {
 const app = join('portal', 'dist')
 if (!existsSync(app)) throw new Error('portal/dist missing: build the portal first')
 cpSync(app, join(out, 'portal-app'), { recursive: true })
+// _redirects mirrors the portal rules in netlify.toml so a manual (drag-and-drop) upload works too.
+import { writeFileSync } from 'node:fs'
+const spa = ['/login', '/register', '/forgot-password', '/reset-password', '/portal', '/portal/*', '/admin', '/admin/*']
+writeFileSync(join(out, '_redirects'), spa.map((f) => `${f}  /portal-app/index.html  200!`).join('\n') + '\n')
 console.log('Assembled', out)
