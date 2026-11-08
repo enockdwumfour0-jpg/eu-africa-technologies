@@ -8,6 +8,7 @@ import type { Client, Deposit, Invoice, LedgerEntry, Payment } from '../../lib/t
 
 type Inv = Invoice & { clients: { company_name: string | null; profiles: { full_name: string } } | null }
 type Pay = Payment & { clients: { profiles: { full_name: string } } | null }
+type Onl = { id: string; reference: string; amount: number; commission: number; fees: number | null; channel: string | null; status: string; settled_as: string | null; created_at: string; paid_at: string | null; clients: { company_name: string | null; profiles: { full_name: string } } | null; invoices: { number: string } | null }
 type Dep = Deposit & { clients: { company_name: string | null; profiles: { full_name: string } } | null }
 type Led = LedgerEntry & { clients: { profiles: { full_name: string } } | null }
 const cname = (c: { company_name?: string | null; profiles?: { full_name: string } } | null | undefined) => c?.profiles?.full_name || c?.company_name || '—'
@@ -16,15 +17,16 @@ const owed = (i: Invoice) => Number(i.total) - Number(i.amount_paid)
 export default function AdminFinance() {
   const [tab, setTab] = useState('invoices')
   const q = useQuery(async () => {
-    const [i, p, l, c, set, dp] = await Promise.all([
+    const [i, p, l, c, set, dp, op] = await Promise.all([
       supabase.from('invoices').select('*, clients(company_name, profiles(full_name))').order('created_at', { ascending: false }),
       supabase.from('payments').select('*, invoices(number), clients(profiles(full_name))').order('paid_at', { ascending: false }),
       supabase.from('ledger_entries').select('*, ledger_accounts(code, name), clients(profiles(full_name))').order('created_at', { ascending: true }),
       supabase.from('clients').select('id, company_name, profiles!inner(full_name, status)').eq('profiles.status', 'active'),
       supabase.from('app_settings').select('value').eq('key', 'system').maybeSingle(),
       supabase.from('deposits').select('*, clients(company_name, profiles(full_name))').order('paid_at', { ascending: false }),
+      supabase.from('online_payments').select('*, clients(company_name, profiles(full_name)), invoices(number)').order('created_at', { ascending: false }).limit(300),
     ])
-    return { dep: ok(dp) as unknown as Dep[], inv: ok(i) as unknown as Inv[], pay: ok(p) as unknown as Pay[], led: ok(l) as unknown as Led[], clients: ok(c) as unknown as (Client & { profiles: { full_name: string } })[], sys: (set.data?.value ?? { invoice_due_days: 14, tax_rate_percent: 0 }) as { invoice_due_days: number; tax_rate_percent: number } }
+    return { onl: ok(op) as unknown as Onl[], dep: ok(dp) as unknown as Dep[], inv: ok(i) as unknown as Inv[], pay: ok(p) as unknown as Pay[], led: ok(l) as unknown as Led[], clients: ok(c) as unknown as (Client & { profiles: { full_name: string } })[], sys: (set.data?.value ?? { invoice_due_days: 14, tax_rate_percent: 0 }) as { invoice_due_days: number; tax_rate_percent: number } }
   }, [])
   return (
     <>
@@ -44,10 +46,11 @@ export default function AdminFinance() {
             <StatCard label="Client credit held" value={ghs(held)} icon={<Wallet size={20} />} tone="grey" />
             <StatCard label="Overdue invoices" value={d.inv.filter((i) => i.status === 'overdue').length} icon={<Ban size={20} />} tone="gold" />
           </div>
-          <Tabs value={tab} onChange={setTab} tabs={[{ id: 'invoices', label: 'Invoices', count: d.inv.length }, { id: 'payments', label: 'Payments', count: d.pay.length }, { id: 'credit', label: 'Account credit', count: d.dep.length }, { id: 'outstanding', label: 'Outstanding' }, { id: 'ledger', label: 'Ledger' }, { id: 'statements', label: 'Statements' }]} />
+          <Tabs value={tab} onChange={setTab} tabs={[{ id: 'invoices', label: 'Invoices', count: d.inv.length }, { id: 'payments', label: 'Payments', count: d.pay.length }, { id: 'credit', label: 'Account credit', count: d.dep.length }, { id: 'online', label: 'Online payments', count: d.onl.length }, { id: 'outstanding', label: 'Outstanding' }, { id: 'ledger', label: 'Ledger' }, { id: 'statements', label: 'Statements' }]} />
           {tab === 'invoices' && <Invoices d={{ ...d, credit }} reload={q.reload} />}
           {tab === 'payments' && <Payments pay={d.pay} reload={q.reload} />}
           {tab === 'credit' && <Credit dep={d.dep} credit={credit} clients={d.clients} reload={q.reload} />}
+          {tab === 'online' && <Online rows={d.onl} />}
           {tab === 'outstanding' && <Outstanding inv={d.inv} />}
           {tab === 'ledger' && <Ledger led={d.led} />}
           {tab === 'statements' && <Statements led={d.led} clients={d.clients} />}
@@ -210,4 +213,14 @@ function DepositForm({ clients, start, onClose, onDone }: { clients: (Client & {
     <Field label="Reference"><input className="input" maxLength={120} value={ref} onChange={(e) => setRef(e.target.value)} /></Field>
     <p className="text-xs text-gray-500">This records money already received. It is held as the client's account credit and a receipt is created. No money is moved by the portal.</p>
     <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy || !client || num(amount) <= 0}>Record deposit</button></div></form></Modal>
+}
+
+function Online({ rows }: { rows: Onl[] }) {
+  const done = rows.filter((r) => r.status === 'success')
+  const commission = done.reduce((s, r) => s + Number(r.commission), 0); const fees = done.reduce((s, r) => s + Number(r.fees ?? 0), 0)
+  return (<>
+    <p className="mb-3 max-w-3xl text-sm text-gray-600">Card and mobile money payments made through Paystack. Successful payments are recorded against the invoice automatically. Refunds are made in the Paystack dashboard.</p>
+    <div className="mb-4 grid gap-3 sm:grid-cols-3"><StatCard label="Paid online" value={ghs(done.reduce((s, r) => s + Number(r.amount), 0))} icon={<Banknote size={20} />} /><StatCard label="Commission (Crestonic)" value={ghs(commission)} tone="grey" icon={<Wallet size={20} />} /><StatCard label="Paystack fees" value={ghs(fees)} tone="grey" icon={<FileCheck2 size={20} />} /></div>
+    <Table rows={rows} cols={[{ header: 'Date', cell: (r) => date(r.paid_at ?? r.created_at) }, { header: 'Client', cell: (r) => cname(r.clients) }, { header: 'Invoice', cell: (r) => r.invoices?.number ?? '' }, { header: 'Amount', cell: (r) => ghs(r.amount) }, { header: 'Commission', cell: (r) => ghs(r.commission) }, { header: 'Channel', cell: (r) => label(r.channel ?? '') }, { header: 'Status', cell: (r) => <Badge s={r.status === 'initiated' ? 'pending' : r.status} /> }, { header: 'Reference', cell: (r) => <span className="font-mono text-xs">{r.reference}</span> }]} />
+  </>)
 }

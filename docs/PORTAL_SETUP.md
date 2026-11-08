@@ -38,7 +38,7 @@ The project already exists (`enlkrucktzppkyxrljpr`). In the Supabase dashboard:
 
 ## 2. Run the SQL migrations
 
-Files are in `supabase/migrations/`, numbered 001 to 012, and must run in order. They only **add** objects; the
+Files are in `supabase/migrations/`, numbered 001 to 013, and must run in order. They only **add** objects; the
 existing `admins`, `enquiries`, `land_listings` and `gallery_items` tables and the current website keep working.
 
 - With the CLI: `supabase link --project-ref enlkrucktzppkyxrljpr` then `supabase db push`.
@@ -136,6 +136,28 @@ that client's own invoices (**Apply credit** on an open invoice). Reversing a cr
 money to the credit balance. Clients see their balance, deposit receipts and movements under **Payments > Account credit**.
 It is not a wallet: it cannot be withdrawn or transferred, and nothing is connected to a payment provider.
 
+### Online payments with Paystack (off by default)
+
+Clients can pay an invoice by card or mobile money (**Pay online** on the Payments page). Switch it on only after
+Crestonic Solutions and EU-AFRIC have agreed the payment arrangement and commission.
+
+1. **Paystack accounts.** The Paystack account of the platform owner (Crestonic Solutions) is the *main* account; EU-AFRIC is
+   created as a *subaccount* in the Paystack dashboard (Subaccounts). Copy its code (`ACCT_...`).
+2. **Secret key.** Supabase > Edge Functions > Secrets: add `PAYSTACK_SECRET_KEY` (use the `sk_test_...` key first, `sk_live_...`
+   later). Never put this key in the website, the portal code or chat.
+3. **Webhook.** Paystack dashboard > Settings > API Keys & Webhooks > Webhook URL:
+   `https://enlkrucktzppkyxrljpr.supabase.co/functions/v1/paystack-webhook`
+4. **Settings.** Admin > Settings > Online payments (Super Administrator): enter the subaccount code, the commission %, who bears
+   Paystack's fee, and tick *Allow clients to pay online*.
+5. Test with a test key and a Paystack test card, then switch to the live key.
+
+How it works: the client's browser never sets the amount. The server reads the invoice balance, creates the Paystack
+checkout with the commission as a split (Crestonic gets the commission, EU-AFRIC the rest; the client pays exactly the invoice
+amount), and records the payment only after Paystack's server confirms it (webhook plus a check when the client returns).
+Each payment is recorded once, even if confirmed twice. If the invoice was settled in the meantime the money is kept as the
+client's account credit. Admin > Finance > Online payments lists every attempt with commission and fees. Refunds are made in
+the Paystack dashboard; reversing a Paystack payment in the portal only corrects the books.
+
 ## Not included in this version
 
-Online payment gateways, stored-value wallets, withdrawals and transfers. Payments and deposits are **recorded** by the accountant. Add a gateway only after the company's payment model and provider are approved.
+Stored-value wallets, withdrawals and transfers (the Paystack integration above is optional and switched off until approved). Payments and deposits are **recorded** by the accountant. Add a gateway only after the company's payment model and provider are approved.

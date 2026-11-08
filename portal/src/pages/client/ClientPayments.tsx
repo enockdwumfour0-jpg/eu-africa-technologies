@@ -1,13 +1,15 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Download, FileDown, Wallet } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { Async, Badge, PageHeader, StatCard, Table, Tabs, ok, useQuery } from '../../components/ui'
+import { Async, Badge, PageHeader, StatCard, Table, Tabs, ok, useAction, useFeedback, useQuery } from '../../components/ui'
 import { date, ghs, label } from '../../lib/format'
 import { exportCsv, exportPdf, receiptPdf, type Col } from '../../lib/export'
 import type { Deposit, Invoice, LedgerEntry, Payment } from '../../lib/types'
 
 export default function ClientPayments() {
   const [tab, setTab] = useState('invoices')
+  const [params, setParams] = useSearchParams(); const { toast } = useFeedback(); const { run, busy } = useAction()
   const q = useQuery(async () => {
     const [i, p, l, me, dp] = await Promise.all([
       supabase.from('invoices').select('*').order('created_at', { ascending: false }),
@@ -18,6 +20,27 @@ export default function ClientPayments() {
     ])
     return { inv: ok(i) as Invoice[], pay: ok(p) as unknown as Payment[], led: ok(l) as unknown as LedgerEntry[], dep: ok(dp) as Deposit[], name: (me.data?.full_name as string) ?? '' }
   }, [])
+  const [online, setOnline] = useState(false)
+  useEffect(() => { void supabase.rpc('online_payments_enabled').then((r) => setOnline(r.data === true)) }, [])
+  // Back from Paystack: confirm the payment with the server, then refresh
+  const ref = params.get('ref')
+  useEffect(() => {
+    if (!ref) return
+    void supabase.functions.invoke('paystack-payments', { body: { action: 'verify', reference: ref } }).then(({ data, error }) => {
+      const st = (data as { status?: string } | null)?.status
+      if (error) toast('We could not confirm the payment yet. It will appear once Paystack confirms it.', 'err')
+      else if (st === 'success') toast('Payment received. Thank you!')
+      else toast('The payment was not completed.', 'err')
+      setParams({}, { replace: true }); q.reload()
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ref])
+  const payOnline = (id: string) => run(async () => {
+    const { data, error } = await supabase.functions.invoke('paystack-payments', { body: { action: 'initialize', invoice_id: id } })
+    const url = (data as { authorization_url?: string } | null)?.authorization_url
+    if (error || !url) throw new Error((data as { error?: string } | null)?.error || 'Could not start the payment')
+    window.location.assign(url)
+  })
   return (
     <>
       <PageHeader title="Payments" sub="Your invoices, payments and account ledger. Payments are recorded by EU-AFRIC once received." />
@@ -45,6 +68,7 @@ export default function ClientPayments() {
             {tab === 'invoices' && <Table rows={inv} cols={[
               { header: 'Invoice', cell: (i) => <b>{i.number}</b> }, { header: 'Issued', cell: (i) => date(i.issue_date) }, { header: 'Due', cell: (i) => date(i.due_date) },
               { header: 'Total', cell: (i) => ghs(i.total) }, { header: 'Paid', cell: (i) => ghs(i.amount_paid) }, { header: 'Balance', cell: (i) => ghs(Number(i.total) - Number(i.amount_paid)) }, { header: 'Status', cell: (i) => <Badge s={i.status} /> },
+              { header: '', cell: (i) => online && ['issued', 'partially_paid', 'overdue'].includes(i.status) && <button className="btn-primary !py-1 text-xs" disabled={busy} onClick={() => payOnline(i.id)}>Pay online</button> },
             ]} />}
             {tab === 'payments' && <Table rows={pay} cols={[
               { header: 'Receipt', cell: (p) => <b>{p.receipt_number}</b> }, { header: 'Date', cell: (p) => date(p.paid_at) }, { header: 'Invoice', cell: (p) => p.invoices?.number ?? '—' },

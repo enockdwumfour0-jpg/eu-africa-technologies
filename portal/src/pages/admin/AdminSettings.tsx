@@ -18,9 +18,9 @@ export default function AdminSettings() {
     const rows = ok(await supabase.from('app_settings').select('key, value')) as { key: string; value: unknown }[]
     return Object.fromEntries(rows.map((r) => [r.key, r.value])) as unknown as Settings
   }, [])
-  const tabs = [{ id: 'company', label: 'Company' }, { id: 'notifications', label: 'Notifications' }, { id: 'email', label: 'Email' }, { id: 'system', label: 'System' }, ...(sa ? [{ id: 'staff', label: 'Staff' }] : []), { id: 'roles', label: 'Role permissions' }, { id: 'audit', label: 'Audit log' }]
+  const tabs = [{ id: 'company', label: 'Company' }, { id: 'notifications', label: 'Notifications' }, { id: 'email', label: 'Email' }, { id: 'system', label: 'System' }, ...(sa ? [{ id: 'staff', label: 'Staff' }, { id: 'paystack', label: 'Online payments' }] : []), { id: 'roles', label: 'Role permissions' }, { id: 'audit', label: 'Audit log' }]
   return (<><PageHeader title="Settings" sub="Company information, notifications, staff and system preferences." /><Tabs tabs={tabs} value={tab} onChange={setTab} />
-    {tab === 'staff' ? <Staff /> : tab === 'roles' ? <Roles /> : tab === 'audit' ? <Audit /> : <Async q={q}>{(s) => <SettingsForm tab={tab} s={s} reload={q.reload} />}</Async>}</>)
+    {tab === 'staff' ? <Staff /> : tab === 'paystack' && sa ? <PaystackSettings /> : tab === 'roles' ? <Roles /> : tab === 'audit' ? <Audit /> : <Async q={q}>{(s) => <SettingsForm tab={tab} s={s} reload={q.reload} />}</Async>}</>)
 }
 
 function SettingsForm({ tab, s, reload }: { tab: string; s: Settings; reload: () => void }) {
@@ -102,4 +102,28 @@ function Audit() {
   if (role !== 'super_admin' && role !== 'admin') return <EmptyState title="Audit log is available to administrators" />
   return (<><div className="mb-3"><Select value={tbl} onChange={setTbl} all="All tables" options={['invoices', 'payments', 'ledger_entries', 'documents', 'document_reviews', 'projects', 'user_roles', 'profiles', 'client_applications', 'app_settings']} /></div>
     <Async q={q} empty={(d) => d.length === 0 && <EmptyState title="No audit entries" />}>{(rows) => <Table rows={rows} cols={[{ header: 'When', cell: (r) => dateTime(r.created_at) }, { header: 'Who', cell: (r) => r.actor }, { header: 'Action', cell: (r) => r.action }, { header: 'Table', cell: (r) => r.table_name }, { header: 'Record', cell: (r) => <span className="font-mono text-xs">{r.record_id?.slice(0, 8)}</span> }]} />}</Async></>)
+}
+
+type PsCfg = { enabled: boolean; subaccount_code: string | null; commission_percent: number; fee_bearer: 'account' | 'subaccount' }
+const WEBHOOK = 'https://enlkrucktzppkyxrljpr.supabase.co/functions/v1/paystack-webhook'
+function PaystackSettings() {
+  const q = useQuery(async () => ok(await supabase.from('paystack_config').select('enabled, subaccount_code, commission_percent, fee_bearer').maybeSingle()) as PsCfg, [])
+  return (<Async q={q}>{(c) => <PaystackForm c={c} reload={q.reload} />}</Async>)
+}
+function PaystackForm({ c, reload }: { c: PsCfg; reload: () => void }) {
+  const [f, setF] = useState({ enabled: c.enabled, sub: c.subaccount_code ?? '', pct: String(c.commission_percent), bearer: c.fee_bearer }); const { run, busy } = useAction()
+  const save = async (e: FormEvent) => { e.preventDefault(); const r = await run(async () => {
+    const pct = Number(f.pct); if (!(pct >= 0 && pct <= 30)) throw new Error('Commission must be between 0 and 30%')
+    const sub = f.sub.trim(); if (sub && !/^ACCT_[A-Za-z0-9]{6,40}$/.test(sub)) throw new Error('Subaccount code looks like ACCT_xxxxxxxxxx')
+    if (f.enabled && pct > 0 && !sub) throw new Error('A commission needs the subaccount code')
+    ok(await supabase.from('paystack_config').update({ enabled: f.enabled, subaccount_code: sub || null, commission_percent: pct, fee_bearer: f.bearer }).eq('id', true)) }, 'Online payment settings saved'); if (r) reload() }
+  return (<form onSubmit={save} className="card max-w-2xl space-y-4 p-5">
+    <p className="text-sm text-gray-600">Lets clients pay invoices by card or mobile money through Paystack. It is off until you switch it on here <b>and</b> the Paystack secret key has been added to the server (see the setup guide). Payments are recorded automatically once Paystack confirms them.</p>
+    <label className="flex items-center gap-2 text-sm font-medium"><input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} />Allow clients to pay online</label>
+    <Field label="Commission (% of each payment)"><input className="input" type="number" min="0" max="30" step="0.01" value={f.pct} onChange={(e) => setF({ ...f, pct: e.target.value })} /></Field>
+    <Field label="EU-AFRIC Paystack subaccount code"><input className="input" placeholder="ACCT_xxxxxxxxxx" value={f.sub} onChange={(e) => setF({ ...f, sub: e.target.value })} /></Field>
+    <Field label="Who pays Paystack's fee"><select className="input" value={f.bearer} onChange={(e) => setF({ ...f, bearer: e.target.value as PsCfg['fee_bearer'] })}><option value="subaccount">EU-AFRIC (commission is paid in full)</option><option value="account">Crestonic (fee comes out of the commission)</option></select></Field>
+    <p className="text-xs text-gray-500">The commission is taken from what is paid, so the client always pays exactly the invoice amount. It is split by Paystack: the commission goes to the Crestonic Solutions Paystack account (the account whose key is installed) and the rest to the EU-AFRIC subaccount.</p>
+    <p className="text-xs text-gray-500">Webhook URL to enter in Paystack (Settings, API Keys and Webhooks): <code className="break-all">{WEBHOOK}</code></p>
+    <div className="flex justify-end"><button className="btn-primary" disabled={busy}>Save settings</button></div></form>)
 }
