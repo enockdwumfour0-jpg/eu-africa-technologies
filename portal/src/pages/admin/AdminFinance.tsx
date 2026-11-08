@@ -8,7 +8,7 @@ import type { Client, Deposit, Invoice, LedgerEntry, Payment } from '../../lib/t
 
 type Inv = Invoice & { clients: { company_name: string | null; profiles: { full_name: string } } | null }
 type Pay = Payment & { clients: { profiles: { full_name: string } } | null }
-type Onl = { id: string; reference: string; amount: number; commission: number; fees: number | null; channel: string | null; status: string; settled_as: string | null; created_at: string; paid_at: string | null; clients: { company_name: string | null; profiles: { full_name: string } } | null; invoices: { number: string } | null }
+type Onl = { note: string | null; id: string; reference: string; amount: number; commission: number; fees: number | null; channel: string | null; status: string; settled_as: string | null; created_at: string; paid_at: string | null; clients: { company_name: string | null; profiles: { full_name: string } } | null; invoices: { number: string } | null }
 type Dep = Deposit & { clients: { company_name: string | null; profiles: { full_name: string } } | null }
 type Led = LedgerEntry & { clients: { profiles: { full_name: string } } | null }
 const cname = (c: { company_name?: string | null; profiles?: { full_name: string } } | null | undefined) => c?.profiles?.full_name || c?.company_name || '—'
@@ -50,7 +50,7 @@ export default function AdminFinance() {
           {tab === 'invoices' && <Invoices d={{ ...d, credit }} reload={q.reload} />}
           {tab === 'payments' && <Payments pay={d.pay} reload={q.reload} />}
           {tab === 'credit' && <Credit dep={d.dep} credit={credit} clients={d.clients} reload={q.reload} />}
-          {tab === 'online' && <Online rows={d.onl} />}
+          {tab === 'online' && <Online rows={d.onl} reload={q.reload} />}
           {tab === 'outstanding' && <Outstanding inv={d.inv} />}
           {tab === 'ledger' && <Ledger led={d.led} />}
           {tab === 'statements' && <Statements led={d.led} clients={d.clients} />}
@@ -215,12 +215,14 @@ function DepositForm({ clients, start, onClose, onDone }: { clients: (Client & {
     <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy || !client || num(amount) <= 0}>Record deposit</button></div></form></Modal>
 }
 
-function Online({ rows }: { rows: Onl[] }) {
+function Online({ rows, reload }: { rows: Onl[]; reload: () => void }) {
+  const { run, busy } = useAction()
+  const recheck = (ref: string) => run(async () => { const { data, error } = await supabase.functions.invoke('paystack-payments', { body: { action: 'verify', reference: ref } }); if (error) throw error; const st = (data as { status?: string }).status; if (st === 'network') throw new Error('Could not reach Paystack. Try again shortly.') }, 'Status refreshed').then(reload)
   const done = rows.filter((r) => r.status === 'success')
   const commission = done.reduce((s, r) => s + Number(r.commission), 0); const fees = done.reduce((s, r) => s + Number(r.fees ?? 0), 0)
   return (<>
     <p className="mb-3 max-w-3xl text-sm text-gray-600">Card and mobile money payments made through Paystack. Successful payments are recorded against the invoice automatically. Refunds are made in the Paystack dashboard.</p>
     <div className="mb-4 grid gap-3 sm:grid-cols-3"><StatCard label="Paid online" value={ghs(done.reduce((s, r) => s + Number(r.amount), 0))} icon={<Banknote size={20} />} /><StatCard label="Commission (Crestonic)" value={ghs(commission)} tone="grey" icon={<Wallet size={20} />} /><StatCard label="Paystack fees" value={ghs(fees)} tone="grey" icon={<FileCheck2 size={20} />} /></div>
-    <Table rows={rows} cols={[{ header: 'Date', cell: (r) => date(r.paid_at ?? r.created_at) }, { header: 'Client', cell: (r) => cname(r.clients) }, { header: 'Invoice', cell: (r) => r.invoices?.number ?? '' }, { header: 'Amount', cell: (r) => ghs(r.amount) }, { header: 'Commission', cell: (r) => ghs(r.commission) }, { header: 'Channel', cell: (r) => label(r.channel ?? '') }, { header: 'Status', cell: (r) => <Badge s={r.status === 'initiated' ? 'pending' : r.status} /> }, { header: 'Reference', cell: (r) => <span className="font-mono text-xs">{r.reference}</span> }]} />
+    <Table rows={rows} cols={[{ header: 'Date', cell: (r) => date(r.paid_at ?? r.created_at) }, { header: 'Client', cell: (r) => cname(r.clients) }, { header: 'Invoice', cell: (r) => r.invoices?.number ?? '' }, { header: 'Amount', cell: (r) => ghs(r.amount) }, { header: 'Commission', cell: (r) => ghs(r.commission) }, { header: 'Channel', cell: (r) => label(r.channel ?? '') }, { header: 'Status', cell: (r) => <Badge s={r.status === 'initiated' ? 'pending' : r.status} /> }, { header: 'Reference', cell: (r) => <span className="font-mono text-xs">{r.reference}</span> }, { header: 'Note', cell: (r) => <span className="text-xs text-gray-600">{r.note ?? ''}</span> }, { header: '', cell: (r) => r.status === 'initiated' && <button className="btn-ghost !px-2 !py-1 text-xs" disabled={busy} onClick={() => recheck(r.reference)}>Check status</button> }]} />
   </>)
 }

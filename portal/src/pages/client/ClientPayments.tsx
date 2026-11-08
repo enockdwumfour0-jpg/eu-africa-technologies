@@ -23,27 +23,31 @@ export default function ClientPayments() {
   const [online, setOnline] = useState(false)
   useEffect(() => { void supabase.rpc('online_payments_enabled').then((r) => setOnline(r.data === true)) }, [])
   // Back from Paystack: confirm the payment with the server, then refresh
-  const ref = params.get('ref')
-  useEffect(() => {
-    if (!ref) return
-    void supabase.functions.invoke('paystack-payments', { body: { action: 'verify', reference: ref } }).then(({ data, error }) => {
-      const st = (data as { status?: string } | null)?.status
-      if (error) toast('We could not confirm the payment yet. It will appear once Paystack confirms it.', 'err')
-      else if (st === 'success') toast('Payment received. Thank you!')
-      else toast('The payment was not completed.', 'err')
-      setParams({}, { replace: true }); q.reload()
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ref])
+  const ref = params.get('ref'); const [checking, setChecking] = useState(false); const [unsure, setUnsure] = useState(false)
+  const confirmPayment = async (reference: string) => {
+    setChecking(true)
+    const { data, error } = await supabase.functions.invoke('paystack-payments', { body: { action: 'verify', reference } })
+    setChecking(false)
+    const st = (data as { status?: string } | null)?.status
+    if (error || st === 'network' || st === 'error' || st === 'unknown') { setUnsure(true); return } // keep the reference so it can be re-checked
+    setUnsure(false); setParams({}, { replace: true }); q.reload()
+    if (st === 'success') toast('Payment received. Thank you!')
+    else if (st === 'flagged') toast('Your payment was received and is being reviewed by our team.')
+    else toast('The payment was not completed. You have not been charged for it, or it is still processing.', 'err')
+  }
+  useEffect(() => { if (ref) void confirmPayment(ref) /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [ref])
   const payOnline = (id: string) => run(async () => {
     const { data, error } = await supabase.functions.invoke('paystack-payments', { body: { action: 'initialize', invoice_id: id } })
     const url = (data as { authorization_url?: string } | null)?.authorization_url
-    if (error || !url) throw new Error((data as { error?: string } | null)?.error || 'Could not start the payment')
+    if (error || !url) throw new Error((data as { error?: string } | null)?.error || 'Could not start the payment. Check your connection and try again.')
+    if (!url.startsWith('https://checkout.paystack.com/')) throw new Error('Could not start the payment')
     window.location.assign(url)
   })
   return (
     <>
       <PageHeader title="Payments" sub="Your invoices, payments and account ledger. Payments are recorded by EU-AFRIC once received." />
+      {ref && (checking || unsure) && <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="status">
+        {checking ? 'Confirming your payment with Paystack…' : <>We could not confirm your payment right now, possibly because of your connection. If you were charged, it will appear here automatically once Paystack confirms it. <button className="ml-1 underline" onClick={() => void confirmPayment(ref)}>Check again</button></>}</div>}
       <Async q={q}>{({ inv, pay, led, dep, name }) => {
         const owing = inv.filter((i) => ['issued', 'partially_paid', 'overdue'].includes(i.status)).reduce((s, i) => s + Number(i.total) - Number(i.amount_paid), 0)
         const paid = pay.filter((p) => p.status === 'confirmed' && p.method !== 'account_credit').reduce((s, p) => s + Number(p.amount), 0)

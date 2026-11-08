@@ -16,13 +16,20 @@ const reply = (req: Request, o: unknown, status = 200) =>
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const REF = /^EAT-[A-Za-z0-9]{10,40}$/;
 
+// Never throws: a timeout or network error comes back as { ok: false, network: true }.
 async function paystack(path: string, key: string, body?: unknown) {
-  const r = await fetch("https://api.paystack.co" + path, {
-    method: body ? "POST" : "GET",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  return { ok: r.ok, json: await r.json().catch(() => ({})) };
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 15000);
+  try {
+    const r = await fetch("https://api.paystack.co" + path, {
+      method: body ? "POST" : "GET", signal: ctl.signal,
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return { ok: r.ok, network: false, json: await r.json().catch(() => ({})) };
+  } catch {
+    return { ok: false, network: true, json: {} };
+  } finally { clearTimeout(t); }
 }
 
 Deno.serve(async (req) => {
@@ -44,7 +51,12 @@ Deno.serve(async (req) => {
     global: { headers: { Authorization: `Bearer ${token}` } }, auth: { persistSession: false },
   });
   const { data: client } = await me.from("clients").select("id").eq("profile_id", user.id).maybeSingle();
-  if (!client) return reply(req, { error: "Only clients can pay online" }, 403);
+  const [{ data: roleRow }, { data: me2 }] = await Promise.all([
+    admin.from("user_roles").select("role").eq("user_id", user.id).maybeSingle(),
+    admin.from("profiles").select("status").eq("id", user.id).maybeSingle(),
+  ]);
+  const finance = me2?.status === "active" && ["super_admin", "admin", "accountant"].includes(roleRow?.role ?? "");
+  if (!client && !finance) return reply(req, { error: "Only clients can pay online" }, 403);
 
   let b: Record<string, unknown> = {};
   try { b = await req.json(); } catch { return reply(req, { error: "Invalid request" }, 400); }
@@ -52,25 +64,32 @@ Deno.serve(async (req) => {
   const settle = async (reference: string) => {
     const v = await paystack(`/transaction/verify/${encodeURIComponent(reference)}`, key);
     const d = v.json?.data;
+    if (v.network) return { status: "network" };           // could not reach Paystack: try again later
     if (!v.ok || !d) return { status: "unknown" };
-    if (d.status !== "success") return { status: String(d.status ?? "unknown") };
+    if (d.status === "failed" || d.status === "reversed") {
+      await admin.from("online_payments").update({ status: "failed" }).eq("reference", reference).eq("status", "initiated");
+      return { status: "failed" };
+    }
+    if (d.status !== "success") return { status: String(d.status ?? "unknown") }; // e.g. abandoned / ongoing
     const { data, error } = await admin.rpc("settle_online_payment", {
       p_reference: reference, p_paystack_id: String(d.id ?? ""), p_amount_pesewas: Number(d.amount),
       p_currency: String(d.currency ?? ""), p_channel: String(d.channel ?? ""), p_fees_pesewas: Number(d.fees ?? 0),
     });
     if (error) return { status: "error" };
-    return { status: "success", settled: data };
+    return { status: data === "flagged" ? "flagged" : "success", settled: data };
   };
 
   if (b.action === "verify") {
     const reference = String(b.reference ?? "");
     if (!REF.test(reference)) return reply(req, { error: "Invalid reference" }, 400);
-    const { data: row } = await admin.from("online_payments").select("client_id").eq("reference", reference).maybeSingle();
-    if (!row || row.client_id !== client.id) return reply(req, { error: "Payment not found" }, 404);
+    const { data: row } = await admin.from("online_payments").select("client_id,status").eq("reference", reference).maybeSingle();
+    if (!row || (!finance && row.client_id !== client?.id)) return reply(req, { error: "Payment not found" }, 404);
+    if (row.status === "success") return reply(req, { status: "success", settled: "already" }); // no Paystack call needed
     return reply(req, await settle(reference));
   }
 
   if (b.action !== "initialize") return reply(req, { error: "Unknown action" }, 400);
+  if (!client) return reply(req, { error: "Only clients can pay online" }, 403);
   const invoiceId = String(b.invoice_id ?? "");
   if (!UUID.test(invoiceId)) return reply(req, { error: "Invalid invoice" }, 400);
 
@@ -100,15 +119,21 @@ Deno.serve(async (req) => {
     body.bearer = cfg.fee_bearer;
     if (commission > 0) body.transaction_charge = commission; // flat amount to the main (Crestonic) account
   }
+  // Limit unfinished attempts so the button cannot be used to flood Paystack or the table
+  const since = new Date(Date.now() - 3600_000).toISOString();
+  const { count: recent } = await admin.from("online_payments").select("id", { count: "exact", head: true })
+    .eq("client_id", client.id).gte("created_at", since);
+  if ((recent ?? 0) >= 8) return reply(req, { error: "Too many attempts. Please try again in a while." }, 429);
   const { error: ie } = await admin.from("online_payments").insert({
     reference, invoice_id: inv.id, client_id: client.id, amount: owed / 100, commission_percent: pct, commission: commission / 100, initiated_by: user.id,
   });
   if (ie) return reply(req, { error: "Could not start the payment" }, 500);
   const r = await paystack("/transaction/initialize", key, body);
   const link = r.json?.data?.authorization_url;
-  if (!r.ok || typeof link !== "string") {
+  // Only ever send the browser to Paystack's own checkout
+  if (!r.ok || typeof link !== "string" || !link.startsWith("https://checkout.paystack.com/")) {
     await admin.from("online_payments").update({ status: "failed" }).eq("reference", reference);
-    return reply(req, { error: "Paystack could not start the payment" }, 502);
+    return reply(req, { error: r.network ? "Could not reach Paystack. Please try again." : "Paystack could not start the payment" }, 502);
   }
   return reply(req, { authorization_url: link, reference });
 });

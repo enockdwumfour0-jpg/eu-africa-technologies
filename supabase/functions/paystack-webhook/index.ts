@@ -11,6 +11,7 @@ Deno.serve(async (req) => {
   const key = Deno.env.get("PAYSTACK_SECRET_KEY");
   if (!key) return ok({ ok: false }, 503);
   const raw = await req.text();
+  if (raw.length > 100_000) return ok({ ok: false }, 413);
   const k = await crypto.subtle.importKey("raw", new TextEncoder().encode(key), { name: "HMAC", hash: "SHA-512" }, false, ["sign"]);
   const expected = hex(await crypto.subtle.sign("HMAC", k, new TextEncoder().encode(raw)));
   const got = req.headers.get("x-paystack-signature") ?? "";
@@ -24,8 +25,11 @@ Deno.serve(async (req) => {
   const reference = String(ev.data?.reference ?? "");
   if (!REF.test(reference)) return ok({ ok: true, ignored: true }); // not one of ours
 
-  const v = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, { headers: { Authorization: `Bearer ${key}` } });
-  const d = (await v.json().catch(() => ({})))?.data;
+  let v: Response; let d: any;
+  try {
+    v = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(15000) });
+    d = (await v.json().catch(() => ({})))?.data;
+  } catch { return ok({ ok: false }, 502); } // network problem: Paystack will retry the webhook
   if (!v.ok || d?.status !== "success") return ok({ ok: false }, 502); // Paystack will retry
   const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
   const { error } = await admin.rpc("settle_online_payment", {

@@ -38,7 +38,7 @@ The project already exists (`enlkrucktzppkyxrljpr`). In the Supabase dashboard:
 
 ## 2. Run the SQL migrations
 
-Files are in `supabase/migrations/`, numbered 001 to 013, and must run in order. They only **add** objects; the
+Files are in `supabase/migrations/`, numbered 001 to 014, and must run in order. They only **add** objects; the
 existing `admins`, `enquiries`, `land_listings` and `gallery_items` tables and the current website keep working.
 
 - With the CLI: `supabase link --project-ref enlkrucktzppkyxrljpr` then `supabase db push`.
@@ -157,6 +157,13 @@ amount), and records the payment only after Paystack's server confirms it (webho
 Each payment is recorded once, even if confirmed twice. If the invoice was settled in the meantime the money is kept as the
 client's account credit. Admin > Finance > Online payments lists every attempt with commission and fees. Refunds are made in
 the Paystack dashboard; reversing a Paystack payment in the portal only corrects the books.
+
+Payment safeguards: the amount and currency are checked against what the server asked for; each Paystack reference can be
+recorded once; a differing amount is kept as account credit and flagged to the finance team; Paystack outages and timeouts
+leave the payment pending (the webhook retries, the client can press *Check again*, and finance can press *Check status*);
+the browser is only ever sent to checkout.paystack.com; attempts are rate-limited; commission details are visible to
+finance staff only. Changing the subaccount code is a Super Administrator action and is written to the audit log; review it
+if the Paystack settings ever change unexpectedly.
 
 ## Not included in this version
 
