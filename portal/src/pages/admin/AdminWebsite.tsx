@@ -114,7 +114,7 @@ const PAGES: [string, string, string][] = [
   ['diaspora-land', 'Diaspora: land', 'diaspora-land.html'], ['diaspora-building', 'Diaspora: building', 'diaspora-building.html'], ['diaspora-solar', 'Diaspora: solar', 'diaspora-solar.html'],
   ['virtual-consultations', 'Virtual consultations', 'virtual-consultations.html'],
 ]
-type TextItem = { key: string; tag: string; def: string }
+type TextItem = { key: string; tag: string; def: string; src?: string }
 type Row = { key: string; value: string }
 
 function PageText() {
@@ -126,7 +126,9 @@ function PageText() {
       supabase.from('site_content').select('key, value').eq('page', page),
     ])
     const doc = new DOMParser().parseFromString(html, 'text/html')
-    const items: TextItem[] = [...doc.querySelectorAll('[data-cms]')].map((e) => ({ key: e.getAttribute('data-cms')!, tag: e.tagName.toLowerCase(), def: (e.textContent ?? '').trim() }))
+    const items: TextItem[] = [...doc.querySelectorAll('[data-cms],[data-cms-img]')].map((e) => e.hasAttribute('data-cms-img')
+      ? { key: e.getAttribute('data-cms-img')!, tag: 'img', def: e.getAttribute('alt') ?? '', src: '/' + (e.getAttribute('src') ?? '') }
+      : { key: e.getAttribute('data-cms')!, tag: e.tagName.toLowerCase(), def: (e.textContent ?? '').trim() })
     return { items, over: Object.fromEntries((ok(rows) as Row[]).map((r) => [r.key, r.value])) as Record<string, string> }
   }, [page])
   return (<>
@@ -135,9 +137,9 @@ function PageText() {
       <input className="input !w-auto min-w-[14rem]" placeholder="Search this page's text" value={find} onChange={(e) => setFind(e.target.value)} />
       <a className="btn-ghost text-sm" href={'https://eatl.co.com/' + (page === 'home' ? '' : file)} target="_blank" rel="noreferrer">View page</a>
     </div>
-    <p className="mb-4 max-w-3xl text-sm text-gray-600">Change a heading or paragraph and press Save. It appears on the website straight away (visitors may need to refresh). Plain text only. Reset returns it to the original wording.</p>
+    <p className="mb-4 max-w-3xl text-sm text-gray-600">Change a heading or paragraph and press Save, or replace a photo (such as a team member's picture) with Upload new photo. It appears on the website straight away (visitors may need to refresh). Plain text only. Reset returns it to the original wording.</p>
     <Async q={q} empty={(d) => d.items.length === 0 && <EmptyState title="No editable text on this page" text="Choose another page." />}>{({ items, over }) => (
-      <div className="space-y-3">{items.filter((i) => !find || (over[i.key] ?? i.def).toLowerCase().includes(find.toLowerCase())).map((i) => <TextRow key={page + i.key} item={i} page={page} saved={over[i.key]} reload={q.reload} />)}</div>
+      <div className="space-y-3">{items.filter((i) => !find || (i.tag === 'img' ? i.def : over[i.key] ?? i.def).toLowerCase().includes(find.toLowerCase())).map((i) => i.tag === 'img' ? <ImageRow key={page + i.key} item={i} page={page} saved={over[i.key]} reload={q.reload} /> : <TextRow key={page + i.key} item={i} page={page} saved={over[i.key]} reload={q.reload} />)}</div>
     )}</Async>
   </>)
 }
@@ -158,5 +160,33 @@ function TextRow({ item, page, saved, reload }: { item: TextItem; page: string; 
     <div className="mt-2 flex items-center justify-end gap-2">
       {saved !== undefined && <button className="btn-ghost !px-2 !py-1 text-xs" disabled={busy} onClick={reset}><Undo2 size={13} />Reset to original</button>}
       <button className="btn-primary !px-3 !py-1 text-xs" disabled={busy || !dirty || !v.trim()} onClick={save}>Save</button>
+    </div></div>)
+}
+
+const SITE_IMG = '/storage/v1/object/public/gallery/'
+function ImageRow({ item, page, saved, reload }: { item: TextItem; page: string; saved?: string; reload: () => void }) {
+  const { run, busy } = useAction()
+  const upload = (file: File | undefined) => file && run(async () => {
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type)) throw new Error('Choose a JPG, PNG or WebP photo')
+    if (file.size > 15 * 1024 * 1024) throw new Error('Photo is too large (15 MB maximum)')
+    const name = `site/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`
+    const up = await supabase.storage.from('gallery').upload(name, await resizeJpeg(file), { contentType: 'image/jpeg', upsert: false }); if (up.error) throw up.error
+    const url = supabase.storage.from('gallery').getPublicUrl(name).data.publicUrl
+    const r = await supabase.from('site_content').upsert({ key: item.key, page, value: url })
+    if (r.error) { await supabase.storage.from('gallery').remove([name]); throw r.error }
+    if (saved) { const m = saved.match(/\/gallery\/(site\/[^?]+)$/); if (m) await supabase.storage.from('gallery').remove([m[1]!]) }
+  }, 'Photo updated on the website').then(reload)
+  const reset = () => run(async () => {
+    ok(await supabase.from('site_content').delete().eq('key', item.key))
+    const m = saved?.match(/\/gallery\/(site\/[^?]+)$/); if (m) await supabase.storage.from('gallery').remove([m[1]!])
+  }, 'Restored original photo').then(reload)
+  return (<div className="card flex items-center gap-4 p-3">
+    <img src={saved ?? item.src} alt="" className="h-24 w-20 rounded-md bg-gray-100 object-cover" />
+    <div className="min-w-0 flex-1"><div className="mb-1 flex items-center gap-2 text-xs text-gray-500"><span className="rounded bg-gray-100 px-1.5 py-0.5 font-mono uppercase">photo</span>{saved !== undefined && <Badge s="edited" />}</div>
+      <p className="truncate text-sm font-medium">{item.def || 'Photo'}</p>
+      <p className="text-xs text-gray-500">JPG, PNG or WebP. Resized automatically. Use a similar shape to the current photo.</p></div>
+    <div className="flex flex-col gap-2">
+      <label className={`btn-primary !px-3 !py-1 text-xs ${busy ? 'pointer-events-none opacity-60' : 'cursor-pointer'}`}>Upload new photo<input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={(e) => { upload(e.target.files?.[0]); e.target.value = '' }} /></label>
+      {saved !== undefined && <button className="btn-ghost !px-2 !py-1 text-xs" disabled={busy} onClick={reset}><Undo2 size={13} />Reset to original</button>}
     </div></div>)
 }

@@ -38,7 +38,7 @@ The project already exists (`enlkrucktzppkyxrljpr`). In the Supabase dashboard:
 
 ## 2. Run the SQL migrations
 
-Files are in `supabase/migrations/`, numbered 001 to 011, and must run in order. They only **add** objects; the
+Files are in `supabase/migrations/`, numbered 001 to 012, and must run in order. They only **add** objects; the
 existing `admins`, `enquiries`, `land_listings` and `gallery_items` tables and the current website keep working.
 
 - With the CLI: `supabase link --project-ref enlkrucktzppkyxrljpr` then `supabase db push`.
@@ -122,10 +122,11 @@ Every other staff member is created from **Admin > Settings > Staff** (they get 
 
 **Admin > Website > Page text** lets an Administrator or Super Administrator change headings and paragraphs on the
 public pages. Pick a page, edit the text, press Save: it appears on eatl.co.com straight away. **Reset to original**
-restores the wording that is in the page file. Plain text only; the legal pages (privacy, terms, cookies) are not editable.
+restores the wording that is in the page file. Photos (team portraits and other page images) can be replaced the same way with
+**Upload new photo**; they are resized and stored in the public `gallery` bucket under `site/`. Plain text only; the legal pages (privacy, terms, cookies) are not editable.
 How it works: editable elements carry `data-cms="key"` in the HTML, `cms.js` overrides them from the `site_content`
 table, and the HTML text stays as the fallback. For new editable text on a page, add `data-cms="page.tag.N"` to a text-only
-heading or paragraph (or re-run `scripts/tag-cms.py`).
+heading or paragraph, or `data-cms-img="page.img.N"` to an `<img>` (or re-run `scripts/tag-cms.py`).
 
 ### Account credit (advance deposits)
 
