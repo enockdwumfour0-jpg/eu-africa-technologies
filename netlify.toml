@@ -4,6 +4,8 @@
 
 [build.environment]
   NODE_VERSION = "22"
+  # These two are public by design (they are compiled into the browser app), so the secrets scanner must not fail the build on them.
+  SECRETS_SCAN_OMIT_KEYS = "VITE_SUPABASE_URL,VITE_SUPABASE_ANON_KEY"
 
 # --- Client portal and admin dashboard (single-page app) -------------------
 # force = true so /admin is served by the app and not by the legacy admin.html.
