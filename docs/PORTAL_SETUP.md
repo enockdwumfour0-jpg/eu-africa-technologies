@@ -47,7 +47,7 @@ existing `admins`, `enquiries`, `land_listings` and `gallery_items` tables and t
 Afterwards open **Advisors > Security** and confirm there are no warnings about missing RLS.
 
 To re-check permissions at any time on a scratch Postgres: `supabase/tests/run.sh <socket-dir> <port>`.
-It applies every migration and runs 240 checks (for example, one client cannot read another client's projects,
+It applies every migration and runs 245 checks (for example, one client cannot read another client's projects,
 documents, messages or invoices; nobody can edit their own role; the ledger cannot be edited).
 
 ## 3. Environment variables
