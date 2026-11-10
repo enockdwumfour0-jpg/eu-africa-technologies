@@ -1,14 +1,33 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowLeft, Lock, MessageSquarePlus, Paperclip, Send } from 'lucide-react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
+import { ArrowLeft, Check, CheckCheck, FileText, Lock, MessageSquarePlus, MessagesSquare, Paperclip, Send, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthContext'
 import { ACCEPT, checkFile, openFile, upload } from '../lib/files'
-import { ago, clean, dateTime } from '../lib/format'
+import { clean, clock, dayKey, dayLabel, initials, listTime } from '../lib/format'
 import type { Client, Message, Thread } from '../lib/types'
-import { Badge, EmptyState, Field, Modal, SearchBox, Spinner, matches, ok, useAction, useFeedback, useQuery } from './ui'
+import { EmptyState, Field, Modal, SearchBox, Spinner, matches, ok, useAction, useFeedback, useQuery } from './ui'
 
 type Mode = 'client' | 'staff'
-type ThreadRow = Thread & { clients?: Client & { profiles?: { full_name: string } }; projects?: { title: string } | null }
+type ThreadRow = Thread & { clients?: Client & { profiles?: { full_name: string } } }
+type Last = { thread_id: string; body: string | null; attachment_name: string | null; sender_id: string; created_at: string; read_at: string | null }
+
+// One tick = sent, two blue ticks = read by the other person.
+const Ticks = ({ read, size = 14 }: { read: boolean; size?: number }) => read
+  ? <CheckCheck size={size} className="shrink-0 text-sky-500" aria-label="Read" />
+  : <Check size={size} className="shrink-0 text-gray-400" aria-label="Sent" />
+
+const AVATAR_TONES = ['bg-brand-green', 'bg-[#0f5c34]', 'bg-[#8a6d00]', 'bg-[#2f3b35]', 'bg-[#1d7a8c]']
+const toneFor = (s: string) => AVATAR_TONES[[...s].reduce((a, c) => a + c.charCodeAt(0), 0) % AVATAR_TONES.length]
+
+function Avatar({ name, size = 'h-12 w-12 text-sm', team }: { name: string; size?: string; team?: boolean }) {
+  return (
+    <span className={`grid shrink-0 place-items-center rounded-full font-bold text-white ${size} ${team ? 'bg-brand-black ring-2 ring-brand-yellow' : toneFor(name)}`} aria-hidden>
+      {team ? 'EA' : initials(name)}
+    </span>
+  )
+}
+
+const personName = (t: ThreadRow, mode: Mode) => (mode === 'staff' ? t.clients?.profiles?.full_name || t.clients?.company_name || 'Client' : 'EU-AFRIC Team')
 
 export default function MessagesView({ mode, canStart = true, onlyClientId }: { mode: Mode; canStart?: boolean; onlyClientId?: string }) {
   const { session } = useAuth()
@@ -19,13 +38,17 @@ export default function MessagesView({ mode, canStart = true, onlyClientId }: { 
   const [creating, setCreating] = useState(false)
 
   const threads = useQuery(async () => {
-    let query = supabase.from('message_threads').select('*, clients(id, company_name, profiles(full_name)), projects(title)').order('last_message_at', { ascending: false })
+    let query = supabase.from('message_threads').select('*, clients(id, company_name, profiles(full_name))').order('last_message_at', { ascending: false })
     if (onlyClientId) query = query.eq('client_id', onlyClientId)
     const t = ok(await query) as unknown as ThreadRow[]
     const un = ok(await supabase.from('messages').select('thread_id').is('read_at', null).eq('from_staff', mode === 'client')) as { thread_id: string }[]
     const counts: Record<string, number> = {}
     un.forEach((m) => { counts[m.thread_id] = (counts[m.thread_id] ?? 0) + 1 })
-    return { t, counts }
+    // newest message per thread, for the preview line in the list
+    const recent = ok(await supabase.from('messages').select('thread_id, body, attachment_name, sender_id, created_at, read_at').order('created_at', { ascending: false }).limit(500)) as Last[]
+    const last: Record<string, Last> = {}
+    recent.forEach((m) => { if (!last[m.thread_id]) last[m.thread_id] = m })
+    return { t, counts, last }
   }, [mode, onlyClientId])
 
   // live refresh of the list when any message in an accessible thread arrives
@@ -35,37 +58,69 @@ export default function MessagesView({ mode, canStart = true, onlyClientId }: { 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid])
 
-  const rows = (threads.data?.t ?? []).filter((t) => matches(q, t.subject, t.clients?.profiles?.full_name, t.clients?.company_name, t.projects?.title))
+  const rows = (threads.data?.t ?? []).filter((t) => matches(q, t.clients?.profiles?.full_name, t.clients?.company_name, mode === 'client' ? 'EU-AFRIC Team' : ''))
   const active = threads.data?.t.find((t) => t.id === sel) ?? null
 
   return (
-    <div className="grid min-h-[70vh] overflow-hidden rounded-xl border border-gray-200 bg-white md:grid-cols-[20rem_1fr]">
-      <div className={`${sel ? 'hidden md:flex' : 'flex'} flex-col border-r border-gray-200`}>
-        <div className="flex items-center gap-2 border-b p-3">
-          <SearchBox value={q} onChange={setQ} placeholder="Search conversations" />
-          {canStart && <button className="btn-primary !px-3" onClick={() => setCreating(true)} aria-label="New conversation"><MessageSquarePlus size={16} /></button>}
+    <div className="grid h-[calc(100dvh-10.5rem)] min-h-[30rem] grid-cols-[minmax(0,1fr)] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm md:grid-cols-[22rem_minmax(0,1fr)]">
+      {/* ---------- conversation list ---------- */}
+      <div className={`${sel ? 'hidden md:flex' : 'flex'} min-h-0 min-w-0 flex-col border-r border-gray-200 bg-white`}>
+        <div className="flex items-center gap-2 border-b bg-white p-3">
+          <h2 className="mr-auto pl-1 font-display text-lg font-semibold text-brand-black md:hidden">Chats</h2>
+          <div className="hidden flex-1 md:block"><SearchBox value={q} onChange={setQ} placeholder="Search chats" /></div>
+          {canStart && <button className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand-green text-white shadow-sm transition hover:bg-[#126b39]" aria-label="New chat" title="New chat"
+            onClick={() => {
+              // a client has one chat with the team: open it instead of making another
+              const mine = mode === 'client' ? threads.data?.t.find((t) => t.status === 'open') : undefined
+              if (mine) setSel(mine.id); else setCreating(true)
+            }}><MessageSquarePlus size={18} /></button>}
         </div>
-        <div className="flex-1 overflow-y-auto">
+        <div className="border-b px-3 pb-3 pt-2 md:hidden"><SearchBox value={q} onChange={setQ} placeholder="Search chats" /></div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
           {threads.loading && !threads.data ? <Spinner /> : threads.error ? <p className="p-4 text-sm text-red-600">{threads.error}</p> :
-            rows.length === 0 ? <p className="p-6 text-center text-sm text-gray-500">No conversations yet.</p> :
+            rows.length === 0 ? (
+              <div className="px-6 py-14 text-center">
+                <span className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-full bg-brand-green/10 text-brand-green"><MessagesSquare size={26} /></span>
+                <p className="font-semibold text-brand-black">{q ? 'No chats match your search' : 'No conversations yet'}</p>
+                {!q && canStart && <p className="mt-1 text-sm text-gray-500">Tap the green button to start one.</p>}
+              </div>
+            ) :
               rows.map((t) => {
                 const n = threads.data?.counts[t.id] ?? 0
+                const l = threads.data?.last[t.id]
+                const name = personName(t, mode)
+                const mineLast = !!l && l.sender_id === uid
+                const preview = l ? (l.body || (l.attachment_name ? '📎 ' + l.attachment_name : '')) : 'No messages yet'
                 return (
-                  <button key={t.id} onClick={() => setSel(t.id)} className={`block w-full border-b border-gray-100 px-4 py-3 text-left hover:bg-gray-50 ${sel === t.id ? 'bg-brand-green/5' : ''}`}>
-                    <div className="flex items-center justify-between gap-2"><p className={`truncate text-sm ${n ? 'font-bold' : 'font-semibold'}`}>{t.subject}</p>{n > 0 && <span className="rounded-full bg-brand-green px-1.5 text-[11px] font-bold text-white">{n}</span>}</div>
-                    <p className="truncate text-xs text-gray-500">{mode === 'staff' ? (t.clients?.profiles?.full_name || t.clients?.company_name || 'Client') : t.projects?.title || 'General enquiry'}{t.status === 'closed' ? ' · closed' : ''}</p>
-                    <p className="text-[11px] text-gray-400">{ago(t.last_message_at)}</p>
+                  <button key={t.id} onClick={() => setSel(t.id)} className={`flex w-full items-center gap-3 border-b border-gray-100 px-3 py-3 text-left transition hover:bg-gray-50 ${sel === t.id ? 'bg-brand-green/10' : ''}`}>
+                    <Avatar name={name} team={mode === 'client'} />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-baseline justify-between gap-2">
+                        <span className={`truncate text-[15px] ${n ? 'font-bold' : 'font-semibold'} text-brand-black`}>{name}</span>
+                        <span className={`shrink-0 text-[11px] ${n ? 'font-semibold text-brand-green' : 'text-gray-400'}`}>{listTime(l?.created_at ?? t.last_message_at)}</span>
+                      </span>
+                      <span className="flex items-center justify-between gap-2">
+                        <span className={`flex min-w-0 items-center gap-1 text-sm ${n ? 'font-semibold text-gray-800' : 'text-gray-500'}`}>
+                          {mineLast && <Ticks read={!!l!.read_at} />}
+                          <span className="truncate">{preview}</span>
+                          {t.status === 'closed' && <Lock size={11} className="shrink-0 text-gray-400" aria-label="Closed" />}
+                        </span>
+                        {n > 0 && <span className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-brand-green px-1.5 text-[11px] font-bold text-white">{n > 99 ? '99+' : n}</span>}
+                      </span>
+                    </span>
                   </button>
                 )
               })}
         </div>
       </div>
-      <div className={`${sel ? 'flex' : 'hidden md:flex'} min-h-[60vh] flex-col`}>
+
+      {/* ---------- chat pane ---------- */}
+      <div className={`${sel ? 'flex' : 'hidden md:flex'} min-h-0 min-w-0 flex-col`}>
         {active ? <Conversation key={active.id} thread={active} mode={mode} uid={uid} back={() => setSel(null)} onChanged={threads.reload}
           onClose={async () => { if (await confirm({ title: 'Close this conversation?', text: 'No more messages can be sent until it is reopened.', action: 'Close' })) { await supabase.from('message_threads').update({ status: 'closed' }).eq('id', active.id); threads.reload() } }} />
-          : <div className="m-auto p-6"><EmptyState title="Select a conversation" text="Messages are private between you and the EU-AFRIC team." /></div>}
+          : <div className="chat-wall m-0 grid flex-1 place-items-center p-6"><EmptyState title="Select a chat" text="Messages are private between you and the EU-AFRIC team." icon={<MessagesSquare size={34} />} /></div>}
       </div>
-      {creating && <NewThread mode={mode} onClose={() => setCreating(false)} onCreated={(id) => { setCreating(false); threads.reload(); setSel(id) }} />}
+      {creating && <NewThread mode={mode} openThreads={(threads.data?.t ?? []).filter((t) => t.status === 'open')} onClose={() => setCreating(false)} onCreated={(id) => { setCreating(false); threads.reload(); setSel(id) }} />}
     </div>
   )
 }
@@ -78,6 +133,8 @@ function Conversation({ thread, mode, uid, back, onChanged, onClose }: { thread:
   const { run, busy } = useAction()
   const { toast } = useFeedback()
   const end = useRef<HTMLDivElement>(null)
+  const box = useRef<HTMLTextAreaElement>(null)
+  const first = useRef(true)
 
   const markRead = useCallback(() => { supabase.rpc('mark_thread_read', { p_thread: thread.id }).then(() => onChanged()) }, [thread.id])
   useEffect(() => {
@@ -85,10 +142,26 @@ function Conversation({ thread, mode, uid, back, onChanged, onClose }: { thread:
     const ch = supabase.channel('msg-' + thread.id)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `thread_id=eq.${thread.id}` }, (p) => {
         setMsgs((m) => (m.some((x) => x.id === (p.new as Message).id) ? m : [...m, p.new as Message])); markRead()
+      })
+      // when the other side opens the chat their app marks our messages read; flip the ticks to "read" live.
+      // (No server-side filter here: it is checked in the handler, which is reliable for UPDATE events.)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, (p) => {
+        const n = p.new as Message
+        if (n.thread_id !== thread.id) return
+        setMsgs((m) => m.map((x) => (x.id === n.id ? { ...x, read_at: n.read_at } : x)))
       }).subscribe()
     return () => { supabase.removeChannel(ch) }
   }, [thread.id])
-  useEffect(() => { end.current?.scrollIntoView({ block: 'end' }) }, [msgs.length])
+  useLayoutEffect(() => {
+    end.current?.scrollIntoView({ block: 'end', behavior: first.current ? 'auto' : 'smooth' })
+    if (msgs.length) first.current = false
+  }, [msgs.length])
+
+  // grow the composer with its content, up to a limit (like a messaging app)
+  useLayoutEffect(() => {
+    const el = box.current; if (!el) return
+    el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 128) + 'px'
+  }, [text])
 
   async function send(e: FormEvent) {
     e.preventDefault()
@@ -101,84 +174,117 @@ function Conversation({ thread, mode, uid, back, onChanged, onClose }: { thread:
       if (error) throw error
       setMsgs((m) => (m.some((x) => x.id === data.id) ? m : [...m, data as Message]))
     })
-    if (done) { setText(''); setFile(null); onChanged() }
+    if (done) { setText(''); setFile(null); onChanged(); box.current?.focus() }
   }
-  const title = mode === 'staff' ? (thread.clients?.profiles?.full_name || thread.clients?.company_name || 'Client') : 'EU-AFRIC Team'
+  const name = personName(thread, mode)
   return (
     <>
-      <div className="flex items-center gap-2 border-b p-3">
-        <button className="rounded p-1.5 hover:bg-gray-100 md:hidden" onClick={back} aria-label="Back to conversations"><ArrowLeft size={18} /></button>
-        <div className="min-w-0 flex-1"><p className="truncate font-semibold">{thread.subject}</p><p className="truncate text-xs text-gray-500">{title}{thread.projects?.title ? ` · ${thread.projects.title}` : ''}</p></div>
-        {thread.status === 'closed' ? <Badge s="closed" /> : mode === 'staff' && <button className="btn-ghost !py-1 text-xs" onClick={onClose}><Lock size={13} />Close</button>}
+      <div className="flex items-center gap-3 border-b bg-white px-3 py-2.5">
+        <button className="-ml-1 rounded-full p-2 text-gray-600 hover:bg-gray-100 md:hidden" onClick={back} aria-label="Back to chats"><ArrowLeft size={20} /></button>
+        <Avatar name={name} size="h-10 w-10 text-xs" team={mode === 'client'} />
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-semibold leading-tight text-brand-black">{name}</p>
+          <p className="truncate text-xs text-gray-500">{mode === 'staff' ? (thread.clients?.company_name && thread.clients.company_name !== name ? thread.clients.company_name : 'Client') : 'Replies from the EU-AFRIC team'}</p>
+        </div>
+        {thread.status === 'closed'
+          ? <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-600"><Lock size={12} />Closed</span>
+          : mode === 'staff' && <button className="btn-ghost !rounded-full !px-2.5 !py-1.5 text-xs" onClick={onClose} aria-label="Close chat" title="Close chat"><Lock size={14} /><span className="hidden sm:inline">Close chat</span></button>}
       </div>
-      <div className="flex-1 space-y-3 overflow-y-auto bg-brand-grey/60 p-4" aria-live="polite">
-        {loading ? <Spinner /> : msgs.map((m) => {
+
+      <div className="chat-wall min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-6" aria-live="polite">
+        {loading ? <Spinner /> : msgs.length === 0 ? <p className="py-10 text-center text-sm text-gray-500">No messages yet.</p> : msgs.map((m, i) => {
           const mine = m.sender_id === uid
+          const prev = msgs[i - 1]
+          const newDay = !prev || dayKey(prev.created_at) !== dayKey(m.created_at)
+          const startOfRun = newDay || prev!.sender_id !== m.sender_id
           return (
-            <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm shadow-sm ${mine ? 'rounded-br-sm bg-brand-green text-white' : 'rounded-bl-sm bg-white text-brand-black'}`}>
-                {!mine && <p className="mb-0.5 text-[11px] font-semibold opacity-60">{m.from_staff ? 'EU-AFRIC' : 'Client'}</p>}
-                {m.body && <p className="whitespace-pre-wrap break-words">{m.body}</p>}
-                {m.attachment_path && <button onClick={() => openFile('message-attachments', m.attachment_path!, m.attachment_name ?? undefined).catch(() => toast('Could not open file', 'err'))} className={`mt-1 flex items-center gap-1 text-xs underline ${mine ? 'text-white' : 'text-brand-green'}`}><Paperclip size={12} />{m.attachment_name ?? 'Attachment'}</button>}
-                <p className={`mt-1 text-[10px] ${mine ? 'text-white/70' : 'text-gray-400'}`}>{dateTime(m.created_at)}{mine && m.read_at ? ' · read' : ''}</p>
+            <Fragment key={m.id}>
+              {newDay && <div className="my-3 flex justify-center"><span className="rounded-lg bg-white/90 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500 shadow-sm">{dayLabel(m.created_at)}</span></div>}
+              <div className={`flex ${mine ? 'justify-end' : 'justify-start'} ${startOfRun ? 'mt-2' : 'mt-0.5'}`}>
+                <div className={`relative max-w-[82%] rounded-2xl px-3 pb-1.5 pt-2 text-[15px] leading-snug shadow-[0_1px_1px_rgba(0,0,0,.12)] sm:max-w-[70%] ${mine ? 'bg-[#dcf8c6] text-brand-black' : 'bg-white text-brand-black'} ${startOfRun ? (mine ? 'rounded-tr-sm' : 'rounded-tl-sm') : ''}`}>
+                  {!mine && startOfRun && m.from_staff && <p className="mb-0.5 text-xs font-bold text-brand-green">EU-AFRIC</p>}
+                  {m.attachment_path && (
+                    <button onClick={() => openFile('message-attachments', m.attachment_path!, m.attachment_name ?? undefined).catch(() => toast('Could not open file', 'err'))}
+                      className="mb-1 flex w-full items-center gap-2 rounded-lg bg-black/5 p-2 text-left hover:bg-black/10">
+                      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-brand-green/15 text-brand-green"><FileText size={18} /></span>
+                      <span className="min-w-0"><span className="block truncate text-sm font-semibold">{m.attachment_name ?? 'Attachment'}</span><span className="block text-[11px] text-gray-500">Tap to open</span></span>
+                    </button>
+                  )}
+                  {m.body && <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{m.body}{/* spacer keeps the time stamp from overlapping the last line */}<span className="inline-block w-[4.25rem]" aria-hidden /></p>}
+                  <span className={`float-right -mt-3.5 flex items-center gap-0.5 text-[10.5px] ${m.body ? '' : '!mt-0'} text-gray-500`}>
+                    {clock(m.created_at)}
+                    {mine && <Ticks read={!!m.read_at} />}
+                  </span>
+                </div>
               </div>
-            </div>
+            </Fragment>
           )
         })}
         <div ref={end} />
       </div>
+
       {thread.status === 'open' ? (
-        <form onSubmit={send} className="border-t p-3">
-          {file && <p className="mb-2 flex items-center gap-2 text-xs text-gray-600"><Paperclip size={12} />{file.name}<button type="button" className="font-semibold text-red-600" onClick={() => setFile(null)}>remove</button></p>}
+        <form onSubmit={send} className="border-t bg-[#f0f2f0] px-3 py-2.5">
+          {file && (
+            <div className="mb-2 flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-sm shadow-sm">
+              <FileText size={16} className="text-brand-green" /><span className="min-w-0 flex-1 truncate">{file.name}</span>
+              <button type="button" className="rounded-full p-1 text-gray-500 hover:bg-gray-100" onClick={() => setFile(null)} aria-label="Remove attachment"><X size={14} /></button>
+            </div>
+          )}
           <div className="flex items-end gap-2">
-            <label className="cursor-pointer rounded-lg border border-gray-300 p-2.5 text-gray-600 hover:bg-gray-50" title="Attach a file"><Paperclip size={16} /><input type="file" accept={ACCEPT} className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></label>
-            <textarea className="input max-h-32 min-h-[2.5rem] flex-1 resize-none" rows={1} maxLength={4000} placeholder="Write a message…" value={text} onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit() } }} />
-            <button className="btn-primary !px-3" disabled={busy || (!text.trim() && !file)} aria-label="Send"><Send size={16} /></button>
+            <div className="flex min-w-0 flex-1 items-end rounded-3xl bg-white px-1.5 shadow-sm ring-1 ring-gray-200 focus-within:ring-2 focus-within:ring-brand-green/40">
+              <label className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-brand-green" title="Attach a file" aria-label="Attach a file">
+                <Paperclip size={19} /><input type="file" accept={ACCEPT} className="hidden" onChange={(e) => { setFile(e.target.files?.[0] ?? null); e.target.value = '' }} />
+              </label>
+              <textarea ref={box} className="max-h-32 min-h-[2.5rem] flex-1 resize-none bg-transparent px-1 py-2.5 text-[15px] leading-5 outline-none placeholder:text-gray-400" rows={1} maxLength={4000} placeholder="Type a message" value={text} onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.form?.requestSubmit() } }} />
+            </div>
+            <button className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-brand-green text-white shadow-sm transition hover:bg-[#126b39] disabled:opacity-40" disabled={busy || (!text.trim() && !file)} aria-label="Send"><Send size={18} className="translate-x-px" /></button>
           </div>
         </form>
-      ) : <p className="border-t p-3 text-center text-sm text-gray-500">This conversation is closed.</p>}
+      ) : <p className="border-t bg-[#f0f2f0] p-3 text-center text-sm text-gray-500">This conversation is closed.</p>}
     </>
   )
 }
 
-function NewThread({ mode, onClose, onCreated }: { mode: Mode; onClose: () => void; onCreated: (id: string) => void }) {
+function NewThread({ mode, openThreads, onClose, onCreated }: { mode: Mode; openThreads: ThreadRow[]; onClose: () => void; onCreated: (id: string) => void }) {
   const { session } = useAuth()
   const uid = session!.user.id
-  const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
   const [clientId, setClientId] = useState('')
-  const [projectId, setProjectId] = useState('')
   const { run, busy } = useAction()
   const clients = useQuery(async () => ok(await supabase.from('clients').select('id, company_name, profiles(full_name)').order('created_at')) as unknown as (Client & { profiles: { full_name: string } })[], [])
-  const projects = useQuery(async () => ok(await supabase.from('projects').select('id, title, client_id').eq('archived', false).order('title')) as unknown as { id: string; title: string; client_id: string }[], [])
   const mine = mode === 'client' ? clients.data?.[0]?.id : clientId
-  const projs = (projects.data ?? []).filter((p) => !mine || p.client_id === mine)
+  const nameOf = (c?: Client & { profiles?: { full_name: string } }) => c?.profiles?.full_name || c?.company_name || 'Client'
 
   async function submit(e: FormEvent) {
     e.preventDefault()
-    if (!mine) return
-    const ok_ = await run(async () => {
-      const { data, error } = await supabase.from('message_threads').insert({ client_id: mine, project_id: projectId || null, subject: clean(subject).slice(0, 160), created_by: uid }).select('id').single()
-      if (error) throw error
-      const m = await supabase.from('messages').insert({ thread_id: data.id, sender_id: uid, body: clean(body) })
+    const msg = clean(body)
+    if (!mine || !msg) return
+    await run(async () => {
+      // one chat per client: if there is already an open one, the message goes into it
+      let id = openThreads.find((t) => t.client_id === mine)?.id
+      if (!id) {
+        // the database needs a title for the thread; it is simply the client's name (also used in notifications)
+        const title = nameOf(clients.data?.find((c) => c.id === mine)).slice(0, 160)
+        const { data, error } = await supabase.from('message_threads').insert({ client_id: mine, subject: title, created_by: uid }).select('id').single()
+        if (error) throw error
+        id = data.id as string
+      }
+      const m = await supabase.from('messages').insert({ thread_id: id, sender_id: uid, body: msg })
       if (m.error) throw m.error
-      onCreated(data.id)
+      onCreated(id)
     })
-    void ok_
   }
   return (
-    <Modal title="New conversation" onClose={onClose}>
+    <Modal title="New chat" onClose={onClose} small>
       <form onSubmit={submit} className="space-y-4">
         {mode === 'staff' && (
-          <Field label="Client"><select className="input" required value={clientId} onChange={(e) => { setClientId(e.target.value); setProjectId('') }}>
-            <option value="">Select a client…</option>{(clients.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.profiles?.full_name || c.company_name}</option>)}</select></Field>
+          <Field label="Client"><select className="input" required value={clientId} onChange={(e) => setClientId(e.target.value)}>
+            <option value="">Select a client…</option>{(clients.data ?? []).map((c) => <option key={c.id} value={c.id}>{nameOf(c)}</option>)}</select></Field>
         )}
-        <Field label="Related project (optional)"><select className="input" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-          <option value="">General enquiry</option>{projs.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}</select></Field>
-        <Field label="Subject"><input className="input" required maxLength={160} value={subject} onChange={(e) => setSubject(e.target.value)} /></Field>
-        <Field label="Message"><textarea className="input" required rows={4} maxLength={4000} value={body} onChange={(e) => setBody(e.target.value)} /></Field>
-        <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy || !mine}>Send</button></div>
+        <Field label="Message"><textarea className="input" required autoFocus rows={4} maxLength={4000} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Type your message…" /></Field>
+        <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy || !mine || !body.trim()}><Send size={15} />Send</button></div>
       </form>
     </Modal>
   )

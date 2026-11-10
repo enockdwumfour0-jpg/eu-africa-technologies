@@ -1,15 +1,96 @@
 import { useState, type FormEvent } from 'react'
-import { Eye, EyeOff, Pencil, Plus, Trash2, Undo2 } from 'lucide-react'
+import { ChevronDown, ChevronUp, Eye, EyeOff, Pencil, Plus, Trash2, Undo2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { Async, Badge, EmptyState, Field, Modal, PageHeader, Table, Tabs, ok, useAction, useFeedback, useQuery } from '../../components/ui'
-import { clean, dateTime, ghs, num } from '../../lib/format'
+import { clean, dateTime, ghs, initials, num } from '../../lib/format'
 
 // Website content: enquiries, land listings and gallery that power the public site (eatl.co.com).
 export default function AdminWebsite() {
   const [tab, setTab] = useState('text')
-  return (<><PageHeader title="Website content" sub="Edit the text on eatl.co.com and manage the enquiries, land listings and gallery shown there." />
-    <Tabs value={tab} onChange={setTab} tabs={[{ id: 'text', label: 'Page text' }, { id: 'enquiries', label: 'Enquiries' }, { id: 'lands', label: 'Land listings' }, { id: 'gallery', label: 'Gallery' }]} />
-    {tab === 'text' ? <PageText /> : tab === 'enquiries' ? <Enquiries /> : tab === 'lands' ? <Lands /> : <Gallery />}</>)
+  return (<><PageHeader title="Website content" sub="Edit the text on eatl.co.com and manage the team, enquiries, land listings and gallery shown there." />
+    <Tabs value={tab} onChange={setTab} tabs={[{ id: 'text', label: 'Page text' }, { id: 'team', label: 'Team' }, { id: 'enquiries', label: 'Enquiries' }, { id: 'lands', label: 'Land listings' }, { id: 'gallery', label: 'Gallery' }]} />
+    {tab === 'text' ? <PageText /> : tab === 'team' ? <Team /> : tab === 'enquiries' ? <Enquiries /> : tab === 'lands' ? <Lands /> : <Gallery />}</>)
+}
+
+// ---------------------------------------------------------------- team
+// The "Our team" page is built from this list, so adding, hiding or deleting a person here changes the public site.
+type Member = { id: string; name: string; title: string; section: 'leadership' | 'team' | 'group'; photo_url: string | null; sort_order: number; published: boolean }
+const SECTIONS: { id: Member['section']; label: string; hint: string }[] = [
+  { id: 'leadership', label: 'Leadership', hint: 'Large photo cards at the top of the page.' },
+  { id: 'team', label: 'Our wider team', hint: 'Round photo cards under "The people behind our work".' },
+  { id: 'group', label: 'Group companies and partners', hint: 'Round photo cards under "Colleagues across our group".' },
+]
+const photoSrc = (u: string | null) => (u ? (/^https?:/.test(u) ? u : '/' + u) : '')
+const teamPhotoPath = (u: string | null) => u?.match(/\/gallery\/(team\/[^?]+)$/)?.[1]
+
+function Team() {
+  const q = useQuery(async () => ok(await supabase.from('team_members').select('*').order('section').order('sort_order')) as Member[], [])
+  const { run } = useAction(); const { confirm } = useFeedback(); const [form, setForm] = useState<Member | 'new' | null>(null)
+  const move = (m: Member, list: Member[], dir: -1 | 1) => {
+    const i = list.findIndex((x) => x.id === m.id), o = list[i + dir]; if (!o) return
+    run(async () => { // swap the two sort positions
+      ok(await supabase.from('team_members').update({ sort_order: o.sort_order }).eq('id', m.id))
+      ok(await supabase.from('team_members').update({ sort_order: m.sort_order }).eq('id', o.id))
+    }).then(q.reload)
+  }
+  const remove = async (m: Member) => {
+    if (!(await confirm({ title: `Delete ${m.name}?`, text: 'They are removed from the website straight away. This cannot be undone. To keep them but stop showing them, use Hide instead.', action: 'Delete', danger: true }))) return
+    await run(async () => { ok(await supabase.from('team_members').delete().eq('id', m.id)); const p = teamPhotoPath(m.photo_url); if (p) await supabase.storage.from('gallery').remove([p]) }, `${m.name} deleted`)
+    q.reload()
+  }
+  return (<>
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+      <p className="max-w-2xl text-sm text-gray-600">These people appear on the public Our team page. Add a person, change a photo or position, reorder with the arrows, hide someone temporarily, or delete them.</p>
+      <button className="btn-primary" onClick={() => setForm('new')}><Plus size={15} />Add team member</button></div>
+    <Async q={q} empty={(d) => d.length === 0 && <EmptyState title="No team members" text="Add the first person to show on the Our team page." />}>{(rows) => (
+      <div className="space-y-6">{SECTIONS.map((s) => { const list = rows.filter((r) => r.section === s.id); return (
+        <section key={s.id}><div className="mb-2"><h2 className="font-display text-lg font-semibold">{s.label} <span className="text-sm font-normal text-gray-500">({list.length})</span></h2><p className="text-xs text-gray-500">{s.hint}</p></div>
+          {list.length === 0 ? <p className="rounded-xl border border-dashed bg-white p-4 text-sm text-gray-500">No one here yet.</p> :
+            <ul className="divide-y overflow-hidden rounded-xl border bg-white">{list.map((m, i) => (
+              <li key={m.id} className={`flex items-center gap-3 p-3 ${m.published ? '' : 'bg-gray-50 opacity-70'}`}>
+                {m.photo_url ? <img src={photoSrc(m.photo_url)} alt="" className="h-12 w-12 shrink-0 rounded-full object-cover" loading="lazy" /> : <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-brand-green/10 text-sm font-bold text-brand-green">{initials(m.name)}</span>}
+                <div className="min-w-0 flex-1"><p className="truncate font-semibold">{m.name}{!m.published && <span className="ml-2 rounded bg-gray-200 px-1.5 py-0.5 text-[11px] font-semibold text-gray-600">Hidden</span>}</p><p className="truncate text-xs text-gray-500">{m.title || 'No position'}</p></div>
+                <div className="flex shrink-0 items-center gap-0.5">
+                  <button className="p-1.5 text-gray-500 hover:text-brand-green disabled:opacity-30" aria-label="Move up" disabled={i === 0} onClick={() => move(m, list, -1)}><ChevronUp size={16} /></button>
+                  <button className="p-1.5 text-gray-500 hover:text-brand-green disabled:opacity-30" aria-label="Move down" disabled={i === list.length - 1} onClick={() => move(m, list, 1)}><ChevronDown size={16} /></button>
+                  <button className="p-1.5 text-gray-500 hover:text-brand-green" aria-label={m.published ? 'Hide from website' : 'Show on website'} title={m.published ? 'Hide from website' : 'Show on website'} onClick={() => run(async () => { ok(await supabase.from('team_members').update({ published: !m.published }).eq('id', m.id)) }).then(q.reload)}>{m.published ? <Eye size={16} /> : <EyeOff size={16} />}</button>
+                  <button className="p-1.5 text-gray-500 hover:text-brand-green" aria-label="Edit" onClick={() => setForm(m)}><Pencil size={16} /></button>
+                  <button className="p-1.5 text-gray-500 hover:text-red-600" aria-label={`Delete ${m.name}`} onClick={() => remove(m)}><Trash2 size={16} /></button>
+                </div></li>))}</ul>}
+        </section>) })}</div>)}</Async>
+    {form && <TeamForm member={form === 'new' ? null : form} rows={q.data ?? []} onClose={() => setForm(null)} onDone={() => { setForm(null); q.reload() }} />}
+  </>)
+}
+
+function TeamForm({ member, rows, onClose, onDone }: { member: Member | null; rows: Member[]; onClose: () => void; onDone: () => void }) {
+  const [f, setF] = useState({ name: member?.name ?? '', title: member?.title ?? '', section: (member?.section ?? 'team') as Member['section'] })
+  const [file, setFile] = useState<File | null>(null); const { run, busy } = useAction(); const { toast } = useFeedback()
+  const submit = async (e: FormEvent) => { e.preventDefault()
+    if (file && !/^image\/(jpeg|png|webp)$/.test(file.type)) return toast('Choose a JPG, PNG or WebP photo.', 'err')
+    if (file && file.size > 15 * 1024 * 1024) return toast('That photo is too large (15 MB maximum).', 'err')
+    const d = await run(async () => {
+      let photo_url = member?.photo_url ?? null, uploaded: string | null = null
+      if (file) {
+        const slug = f.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'member'; uploaded = `team/${Date.now()}-${slug}.jpg`
+        const up = await supabase.storage.from('gallery').upload(uploaded, await resizeJpeg(file), { contentType: 'image/jpeg', upsert: false }); if (up.error) throw up.error
+        photo_url = supabase.storage.from('gallery').getPublicUrl(uploaded).data.publicUrl
+      }
+      const body = { name: clean(f.name), title: clean(f.title), section: f.section, photo_url }
+      // a new person goes to the end of their section; moving a person to another section also puts them last there
+      const last = Math.max(0, ...rows.filter((r) => r.section === f.section && r.id !== member?.id).map((r) => r.sort_order))
+      const r = member ? await supabase.from('team_members').update(member.section === f.section ? body : { ...body, sort_order: last + 10 }).eq('id', member.id) : await supabase.from('team_members').insert({ ...body, sort_order: last + 10 })
+      if (r.error) { if (uploaded) await supabase.storage.from('gallery').remove([uploaded]); throw r.error }
+      const old = uploaded ? teamPhotoPath(member?.photo_url ?? null) : null; if (old) await supabase.storage.from('gallery').remove([old]) // replaced photo no longer needed
+    }, member ? 'Team member saved' : 'Team member added'); if (d) onDone()
+  }
+  return <Modal title={member ? `Edit ${member.name}` : 'Add team member'} onClose={onClose} small><form onSubmit={submit} className="space-y-4">
+    <Field label="Full name"><input className="input" required maxLength={120} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
+    <Field label="Position"><input className="input" maxLength={160} value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} placeholder="e.g. Site Supervisor" /></Field>
+    <Field label="Where on the page"><select className="input" value={f.section} onChange={(e) => setF({ ...f, section: e.target.value as Member['section'] })}>{SECTIONS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}</select></Field>
+    <Field label={member?.photo_url ? 'Replace photo (optional)' : 'Photo (optional)'} hint="A clear head-and-shoulders photo works best. JPG, PNG or WebP, resized automatically.">
+      <div className="flex items-center gap-3">{member?.photo_url && !file && <img src={photoSrc(member.photo_url)} alt="" className="h-14 w-14 rounded-full object-cover" />}
+        <input className="input" type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></div></Field>
+    <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy || !f.name.trim()}>{busy ? 'Saving…' : 'Save'}</button></div></form></Modal>
 }
 
 type Enq = { id: string; created_at: string; name: string; phone: string; country: string; topic: string; preferred_time: string | null; email: string | null; message: string | null; status: string; notes: string | null }

@@ -39,6 +39,8 @@ Deno.serve(async (req) => {
   const full_name = String(b.full_name ?? "").replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, 120);
   const email = String(b.email ?? "").trim().toLowerCase();
   const newRole = String(b.role ?? "");
+  // Position / job title is free text and has no effect on permissions (the role does).
+  const job_title = String(b.job_title ?? "").replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, 80);
   if (!full_name) return reply(req, { error: "Full name is required" }, 400);
   if (!EMAIL.test(email) || email.length > 254) return reply(req, { error: "Enter a valid email address" }, 400);
   if (!ROLES.has(newRole)) return reply(req, { error: "Invalid role" }, 400);
@@ -53,6 +55,9 @@ Deno.serve(async (req) => {
     const taken = /already|registered|exists/i.test(ce?.message ?? "");
     return reply(req, { error: taken ? "An account with this email already exists" : "Could not create the account" }, taken ? 409 : 500);
   }
+
+  // The profile row is created by the signup trigger; record the position on it (service role, so the guard allows it).
+  if (job_title) await sb.from("profiles").update({ job_title }).eq("id", created.user.id);
 
   // 4. Let them choose their own password.
   const anon = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, { auth: { persistSession: false } });

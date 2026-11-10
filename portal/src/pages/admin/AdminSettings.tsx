@@ -1,11 +1,11 @@
 import { useState, type FormEvent } from 'react'
-import { Plus } from 'lucide-react'
+import { Pencil, Plus } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../auth/AuthContext'
 import { Async, Badge, EmptyState, Field, Modal, PageHeader, Select, Table, Tabs, ok, useAction, useFeedback, useQuery } from '../../components/ui'
 import { clean, dateTime, label, num } from '../../lib/format'
 import { ROLE_LABEL, STAFF_ROLES, type Role } from '../../lib/roles'
-import { useStaff } from '../../lib/hooks'
+import { useStaff, type StaffMember } from '../../lib/hooks'
 import type { AuditLog } from '../../lib/types'
 
 type Settings = { company: Record<string, string>; notifications: { email_enabled: boolean; types: Record<string, boolean> }; email: Record<string, string>; system: { currency: string; invoice_due_days: number; tax_rate_percent: number } }
@@ -45,12 +45,17 @@ function SettingsForm({ tab, s, reload }: { tab: string; s: Settings; reload: ()
 
 function Staff() {
   const q = useStaff(); const { run } = useAction(); const { confirm } = useFeedback(); const [add, setAdd] = useState(false); const { session } = useAuth()
+  const [editTitle, setEditTitle] = useState<StaffMember | null>(null)
   const rpc = (fn: string, args: Record<string, unknown>, msg: string) => run(async () => { ok(await supabase.rpc(fn, args)) }, msg).then(() => q.reload())
   return (<>
-    <div className="mb-3 flex justify-end"><button className="btn-primary" onClick={() => setAdd(true)}><Plus size={15} />Create staff account</button></div>
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <p className="max-w-2xl text-xs text-gray-500"><b>Position</b> is the job title shown for the person (anything you like, for example HR Manager or Site Supervisor). <b>Access level</b> decides what they can do in the dashboard.</p>
+      <button className="btn-primary" onClick={() => setAdd(true)}><Plus size={15} />Create staff account</button></div>
     <Async q={q} empty={(d) => d.length === 0 && <EmptyState title="No staff accounts" />}>{(rows) => <Table rows={rows.map((r) => ({ ...r, id: r.id }))} cols={[
       { header: 'Name', cell: (r) => <div><p className="font-semibold">{r.full_name}</p><p className="text-xs text-gray-500">{r.email}</p></div> },
-      { header: 'Role', cell: (r) => r.id === session!.user.id ? <span>{ROLE_LABEL[r.role as Role]} <span className="text-xs text-gray-500">(you)</span></span> :
+      { header: 'Position', cell: (r) => <button className="group flex items-center gap-1.5 text-left text-sm hover:text-brand-green" onClick={() => setEditTitle(r)} aria-label={`Edit position for ${r.full_name}`}>
+        <span className={r.job_title ? '' : 'text-gray-400'}>{r.job_title || 'Add position'}</span><Pencil size={13} className="text-gray-400 group-hover:text-brand-green" /></button> },
+      { header: 'Access level', cell: (r) => r.id === session!.user.id ? <span>{ROLE_LABEL[r.role as Role]} <span className="text-xs text-gray-500">(you)</span></span> :
         <select className="input !w-auto !py-1 text-xs" value={r.role} onChange={async (e) => { if (await confirm({ title: `Change role to ${ROLE_LABEL[e.target.value as Role]}?`, text: r.full_name, action: 'Change role' })) rpc('set_user_role', { p_user: r.id, p_role: e.target.value }, 'Role updated') }}>{STAFF_ROLES.map((x) => <option key={x} value={x}>{ROLE_LABEL[x]}</option>)}</select> },
       { header: 'Status', cell: (r) => <Badge s={r.status} /> },
       { header: '', cell: (r) => r.id !== session!.user.id && (r.status === 'active'
@@ -58,19 +63,36 @@ function Staff() {
         : <button className="btn-primary !px-2 !py-1 text-xs" onClick={() => rpc('set_account_status', { p_user: r.id, p_status: 'active' }, 'Account activated')}>Activate</button>) },
     ]} />}</Async>
     {add && <NewStaff onClose={() => setAdd(false)} onDone={() => { setAdd(false); q.reload() }} />}
+    {editTitle && <EditTitle s={editTitle} onClose={() => setEditTitle(null)} onDone={() => { setEditTitle(null); q.reload() }} />}
   </>)
 }
+
+// Common positions offered as suggestions; any other text can be typed.
+const POSITIONS = ['Operations Manager', 'HR Manager', 'Marketing Officer', 'Sales Executive', 'Site Supervisor', 'Site Engineer', 'Procurement Officer', 'Customer Service Officer', 'Receptionist', 'Logistics Officer']
+function PositionField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (<Field label="Position (job title)" hint="Type any position. It is only a label and does not change what the person can access.">
+    <input className="input" list="staff-positions" maxLength={80} value={value} onChange={(e) => onChange(e.target.value)} placeholder="e.g. HR Manager" />
+    <datalist id="staff-positions">{POSITIONS.map((p) => <option key={p} value={p} />)}</datalist></Field>)
+}
+function EditTitle({ s, onClose, onDone }: { s: StaffMember; onClose: () => void; onDone: () => void }) {
+  const [t, setT] = useState(s.job_title ?? ''); const { run, busy } = useAction()
+  const submit = async (e: FormEvent) => { e.preventDefault(); const d = await run(async () => { ok(await supabase.rpc('set_staff_title', { p_user: s.id, p_title: clean(t) })) }, 'Position saved'); if (d) onDone() }
+  return <Modal title={`Position for ${s.full_name}`} onClose={onClose} small><form onSubmit={submit} className="space-y-4">
+    <PositionField value={t} onChange={setT} />
+    <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy}>Save</button></div></form></Modal>
+}
 function NewStaff({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
-  const [f, setF] = useState({ full_name: '', email: '', role: 'project_manager' }); const { run, busy } = useAction()
+  const [f, setF] = useState({ full_name: '', email: '', role: 'project_manager', job_title: '' }); const { run, busy } = useAction()
   const submit = async (e: FormEvent) => { e.preventDefault()
-    const d = await run(async () => { const { data, error } = await supabase.functions.invoke('admin-create-staff', { body: { full_name: clean(f.full_name), email: f.email.trim(), role: f.role } })
+    const d = await run(async () => { const { data, error } = await supabase.functions.invoke('admin-create-staff', { body: { full_name: clean(f.full_name), email: f.email.trim(), role: f.role, job_title: clean(f.job_title) } })
       if (error) { let m = error.message; try { const j = await (error as { context?: Response }).context?.json(); if (j?.error) m = j.error } catch { /* ignore */ } throw new Error(m) }
       if (data?.error) throw new Error(data.error) }, 'Staff account created. A password-setup email was sent.'); if (d) onDone() }
   return <Modal title="Create staff account" onClose={onClose} small><form onSubmit={submit} className="space-y-4">
     <Field label="Full name"><input className="input" required maxLength={120} value={f.full_name} onChange={(e) => setF({ ...f, full_name: e.target.value })} /></Field>
     <Field label="Email"><input className="input" type="email" required value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
-    <Field label="Role"><select className="input" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{STAFF_ROLES.map((x) => <option key={x} value={x}>{ROLE_LABEL[x]}</option>)}</select></Field>
-    <p className="text-xs text-gray-500">The new staff member receives an email to set their own password. The role is assigned on the server and cannot be changed by the user.</p>
+    <PositionField value={f.job_title} onChange={(v) => setF({ ...f, job_title: v })} />
+    <Field label="Access level" hint="What they can do in the dashboard. See the Role permissions tab."><select className="input" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{STAFF_ROLES.map((x) => <option key={x} value={x}>{ROLE_LABEL[x]}</option>)}</select></Field>
+    <p className="text-xs text-gray-500">The new staff member receives an email to set their own password. The access level is assigned on the server and cannot be changed by the user.</p>
     <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy}>Create</button></div></form></Modal>
 }
 

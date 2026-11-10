@@ -74,12 +74,12 @@ export default function Shell({ nav, title, base, profilePath, children }: { nav
   const navigate = useNavigate()
   const [drawer, setDrawer] = useState(false)
   const [menu, setMenu] = useState(false)
-  const [me, setMe] = useState<{ full_name: string; avatar_path: string | null } | null>(null)
+  const [me, setMe] = useState<{ full_name: string; avatar_path: string | null; job_title: string | null } | null>(null)
   const [avatar, setAvatar] = useState<string | null>(null)
   const menuBox = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    supabase.from('profiles').select('full_name, avatar_path').eq('id', session!.user.id).maybeSingle().then(({ data }) => {
+    supabase.from('profiles').select('full_name, avatar_path, job_title').eq('id', session!.user.id).maybeSingle().then(({ data }) => {
       setMe(data); if (data?.avatar_path) signedUrl('avatars', data.avatar_path).then(setAvatar).catch(() => {})
     })
   }, [session])
@@ -133,6 +133,7 @@ export default function Shell({ nav, title, base, profilePath, children }: { nav
               {menu && (
                 <div className="absolute right-0 z-50 mt-2 w-60 rounded-xl border border-gray-200 bg-white py-1 shadow-xl">
                   <div className="border-b px-4 py-2"><p className="truncate text-sm font-semibold">{name}</p><p className="truncate text-xs text-gray-500">{session!.user.email}</p>
+                    {me?.job_title && <p className="truncate text-xs font-semibold text-gray-700">{me.job_title}</p>}
                     <p className="mt-1 inline-block rounded bg-brand-yellow/30 px-1.5 text-[11px] font-semibold text-yellow-900">{role ? ROLE_LABEL[role] : ''}</p></div>
                   {profilePath && <Link to={profilePath} onClick={() => setMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm hover:bg-gray-50"><User size={15} />My profile</Link>}
                   <button onClick={async () => { await signOut(); navigate('/login') }} className="flex w-full items-center gap-2 px-4 py-2 text-sm text-red-700 hover:bg-red-50"><LogOut size={15} />Sign out</button>
