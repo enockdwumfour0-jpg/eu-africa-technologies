@@ -4,6 +4,7 @@ import { ArrowLeft, Check, Pause, Play, X } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { Async, Badge, Field, Modal, PageHeader, SearchBox, Select, Table, Tabs, matches, ok, useAction, useFeedback, useQuery } from '../../components/ui'
 import { date, dateTime, ghs } from '../../lib/format'
+import { useAuth } from '../../auth/AuthContext'
 import MessagesView from '../../components/Messages'
 import type { Client, Invoice, Payment, Project } from '../../lib/types'
 
@@ -58,24 +59,31 @@ export function ClientDetail() {
   const { id } = useParams()
   const [tab, setTab] = useState('overview')
   const q = useQuery(async () => {
-    const [c, p, i, pay] = await Promise.all([
+    const [c, p, i, pay, ag] = await Promise.all([
       supabase.from('clients').select('*, profiles!inner(id, full_name, email, phone, status, rejection_reason, created_at)').eq('id', id!).maybeSingle(),
       supabase.from('projects').select('*').eq('client_id', id!).order('created_at', { ascending: false }),
       supabase.from('invoices').select('*').eq('client_id', id!).order('created_at', { ascending: false }),
       supabase.from('payments').select('*, invoices(number)').eq('client_id', id!).order('paid_at', { ascending: false }),
+      supabase.from('agents').select('user_id, code, profiles(full_name)'),
     ])
-    return { c: ok(c) as unknown as Row | null, projects: ok(p) as Project[], inv: ok(i) as Invoice[], pay: ok(pay) as unknown as Payment[] }
+    return { c: ok(c) as unknown as Row | null, projects: ok(p) as Project[], inv: ok(i) as Invoice[], pay: ok(pay) as unknown as Payment[], agents: (ag.error ? [] : ag.data) as unknown as { user_id: string; code: string; profiles: { full_name: string } | null }[] }
   }, [id])
   const rv = useReview(q.reload)
+  const { role } = useAuth(); const { run } = useAction()
+  const canAssign = role === 'super_admin' || role === 'admin'
   return (
     <>
       <Link to="/admin/clients" className="mb-3 inline-flex items-center gap-1 text-sm font-semibold text-brand-green"><ArrowLeft size={14} />All clients</Link>
-      <Async q={q}>{({ c, projects, inv, pay }) => !c ? <p>Client not found.</p> : (
+      <Async q={q}>{({ c, projects, inv, pay, agents }) => !c ? <p>Client not found.</p> : (
         <>
           <PageHeader title={c.profiles.full_name || c.profiles.email} sub={c.company_name ?? undefined} actions={<Actions r={c} rv={rv} />} />
           <Tabs value={tab} onChange={setTab} tabs={[{ id: 'overview', label: 'Profile' }, { id: 'projects', label: 'Projects', count: projects.length }, { id: 'payments', label: 'Payments', count: pay.length }, { id: 'messages', label: 'Messages' }]} />
           {tab === 'overview' && <div className="card grid gap-4 text-sm sm:grid-cols-2">
             {([['Email', c.profiles.email], ['Phone', c.profiles.phone || '—'], ['Company', c.company_name || '—'], ['Address', c.address || '—'], ['Registered', dateTime(c.profiles.created_at)]] as [string, string][]).map(([k, v]) => <div key={k}><p className="text-xs font-semibold uppercase text-gray-500">{k}</p><p>{v}</p></div>)}
+            <div><p className="text-xs font-semibold uppercase text-gray-500">Referred by agent</p>
+              {canAssign ? <select className="input mt-1" value={c.agent_id ?? ''} onChange={async (e) => { await run(async () => { const { error } = await supabase.from('clients').update({ agent_id: e.target.value || null }).eq('id', c.id); if (error) throw error }, 'Agent updated'); q.reload() }}><option value="">No agent</option>{agents.map((a) => <option key={a.user_id} value={a.user_id}>{a.profiles?.full_name || a.code} ({a.code})</option>)}</select>
+                : <p>{agents.find((a) => a.user_id === c.agent_id)?.profiles?.full_name ?? '—'}</p>}
+              <p className="mt-1 text-xs text-gray-500">Commission applies to payments received after the agent is set.</p></div>
             <div><p className="text-xs font-semibold uppercase text-gray-500">Status</p><Badge s={c.profiles.status} />{c.profiles.rejection_reason && <p className="mt-1 text-xs text-gray-600">Reason: {c.profiles.rejection_reason}</p>}</div></div>}
           {tab === 'projects' && <Table rows={projects} cols={[{ header: 'Project', cell: (p) => <Link className="font-semibold text-brand-green" to={`/admin/projects/${p.id}`}>{p.title}</Link> }, { header: 'Code', cell: (p) => p.code }, { header: 'Status', cell: (p) => <Badge s={p.status} /> }, { header: 'Progress', cell: (p) => p.progress + '%' }, { header: 'ETA', cell: (p) => date(p.estimated_completion) }]} />}
           {tab === 'payments' && <div className="space-y-4">
