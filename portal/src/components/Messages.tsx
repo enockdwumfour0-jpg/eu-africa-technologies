@@ -7,8 +7,8 @@ import { clean, clock, dayKey, dayLabel, initials, listTime } from '../lib/forma
 import type { Client, Message, Thread } from '../lib/types'
 import { EmptyState, Field, Modal, SearchBox, Spinner, matches, ok, useAction, useFeedback, useQuery } from './ui'
 
-type Mode = 'client' | 'staff'
-type ThreadRow = Thread & { clients?: Client & { profiles?: { full_name: string } } }
+type Mode = 'client' | 'staff' | 'agent'
+type ThreadRow = Thread & { agent_id?: string | null; agent?: { full_name: string } | null; clients?: Client & { profiles?: { full_name: string } } }
 type Last = { thread_id: string; body: string | null; attachment_name: string | null; sender_id: string; created_at: string; read_at: string | null }
 
 // One tick = sent, two blue ticks = read by the other person.
@@ -27,7 +27,7 @@ function Avatar({ name, size = 'h-12 w-12 text-sm', team }: { name: string; size
   )
 }
 
-const personName = (t: ThreadRow, mode: Mode) => (mode === 'staff' ? t.clients?.profiles?.full_name || t.clients?.company_name || 'Client' : 'EU-AFRIC Team')
+const personName = (t: ThreadRow, mode: Mode) => (mode === 'staff' ? (t.agent_id ? t.agent?.full_name || 'Agent' : t.clients?.profiles?.full_name || t.clients?.company_name || 'Client') : 'EU-AFRIC Team')
 
 export default function MessagesView({ mode, canStart = true, onlyClientId }: { mode: Mode; canStart?: boolean; onlyClientId?: string }) {
   const { session } = useAuth()
@@ -38,10 +38,10 @@ export default function MessagesView({ mode, canStart = true, onlyClientId }: { 
   const [creating, setCreating] = useState(false)
 
   const threads = useQuery(async () => {
-    let query = supabase.from('message_threads').select('*, clients(id, company_name, profiles(full_name))').order('last_message_at', { ascending: false })
+    let query = supabase.from('message_threads').select('*, clients(id, company_name, profiles(full_name)), agent:profiles!agent_id(full_name)').order('last_message_at', { ascending: false })
     if (onlyClientId) query = query.eq('client_id', onlyClientId)
     const t = ok(await query) as unknown as ThreadRow[]
-    const un = ok(await supabase.from('messages').select('thread_id').is('read_at', null).eq('from_staff', mode === 'client')) as { thread_id: string }[]
+    const un = ok(await supabase.from('messages').select('thread_id').is('read_at', null).eq('from_staff', mode !== 'staff')) as { thread_id: string }[]
     const counts: Record<string, number> = {}
     un.forEach((m) => { counts[m.thread_id] = (counts[m.thread_id] ?? 0) + 1 })
     // newest message per thread, for the preview line in the list
@@ -58,7 +58,7 @@ export default function MessagesView({ mode, canStart = true, onlyClientId }: { 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid])
 
-  const rows = (threads.data?.t ?? []).filter((t) => matches(q, t.clients?.profiles?.full_name, t.clients?.company_name, mode === 'client' ? 'EU-AFRIC Team' : ''))
+  const rows = (threads.data?.t ?? []).filter((t) => matches(q, t.clients?.profiles?.full_name, t.clients?.company_name, t.agent?.full_name, mode !== 'staff' ? 'EU-AFRIC Team' : ''))
   const active = threads.data?.t.find((t) => t.id === sel) ?? null
 
   return (
@@ -71,7 +71,7 @@ export default function MessagesView({ mode, canStart = true, onlyClientId }: { 
           {canStart && <button className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand-green text-white shadow-sm transition hover:bg-[#126b39]" aria-label="New chat" title="New chat"
             onClick={() => {
               // a client has one chat with the team: open it instead of making another
-              const mine = mode === 'client' ? threads.data?.t.find((t) => t.status === 'open') : undefined
+              const mine = mode !== 'staff' ? threads.data?.t.find((t) => t.status === 'open') : undefined
               if (mine) setSel(mine.id); else setCreating(true)
             }}><MessageSquarePlus size={18} /></button>}
         </div>
@@ -93,7 +93,7 @@ export default function MessagesView({ mode, canStart = true, onlyClientId }: { 
                 const preview = l ? (l.body || (l.attachment_name ? '📎 ' + l.attachment_name : '')) : 'No messages yet'
                 return (
                   <button key={t.id} onClick={() => setSel(t.id)} className={`flex w-full items-center gap-3 border-b border-gray-100 px-3 py-3 text-left transition hover:bg-gray-50 ${sel === t.id ? 'bg-brand-green/10' : ''}`}>
-                    <Avatar name={name} team={mode === 'client'} />
+                    <Avatar name={name} team={mode !== 'staff'} />
                     <span className="min-w-0 flex-1">
                       <span className="flex items-baseline justify-between gap-2">
                         <span className={`truncate text-[15px] ${n ? 'font-bold' : 'font-semibold'} text-brand-black`}>{name}</span>
@@ -181,10 +181,10 @@ function Conversation({ thread, mode, uid, back, onChanged, onClose }: { thread:
     <>
       <div className="flex items-center gap-3 border-b bg-white px-3 py-2.5">
         <button className="-ml-1 rounded-full p-2 text-gray-600 hover:bg-gray-100 md:hidden" onClick={back} aria-label="Back to chats"><ArrowLeft size={20} /></button>
-        <Avatar name={name} size="h-10 w-10 text-xs" team={mode === 'client'} />
+        <Avatar name={name} size="h-10 w-10 text-xs" team={mode !== 'staff'} />
         <div className="min-w-0 flex-1">
           <p className="truncate font-semibold leading-tight text-brand-black">{name}</p>
-          <p className="truncate text-xs text-gray-500">{mode === 'staff' ? (thread.clients?.company_name && thread.clients.company_name !== name ? thread.clients.company_name : 'Client') : 'Replies from the EU-AFRIC team'}</p>
+          <p className="truncate text-xs text-gray-500">{mode === 'staff' ? (thread.agent_id ? 'Agent' : thread.clients?.company_name && thread.clients.company_name !== name ? thread.clients.company_name : 'Client') : 'Replies from the EU-AFRIC team'}</p>
         </div>
         {thread.status === 'closed'
           ? <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-600"><Lock size={12} />Closed</span>
@@ -254,7 +254,7 @@ function NewThread({ mode, openThreads, onClose, onCreated }: { mode: Mode; open
   const [clientId, setClientId] = useState('')
   const { run, busy } = useAction()
   const clients = useQuery(async () => ok(await supabase.from('clients').select('id, company_name, profiles(full_name)').order('created_at')) as unknown as (Client & { profiles: { full_name: string } })[], [])
-  const mine = mode === 'client' ? clients.data?.[0]?.id : clientId
+  const mine = mode === 'agent' ? uid : mode === 'client' ? clients.data?.[0]?.id : clientId
   const nameOf = (c?: Client & { profiles?: { full_name: string } }) => c?.profiles?.full_name || c?.company_name || 'Client'
 
   async function submit(e: FormEvent) {
@@ -263,13 +263,20 @@ function NewThread({ mode, openThreads, onClose, onCreated }: { mode: Mode; open
     if (!mine || !msg) return
     await run(async () => {
       // one chat per client: if there is already an open one, the message goes into it
-      let id = openThreads.find((t) => t.client_id === mine)?.id
+      let id = mode === 'agent' ? openThreads[0]?.id : openThreads.find((t) => t.client_id === mine)?.id
       if (!id) {
         // the database needs a title for the thread; it is simply the client's name (also used in notifications)
+        if (mode === 'agent') {
+          const me = ok(await supabase.from('profiles').select('full_name').eq('id', uid).maybeSingle()) as { full_name: string } | null
+          const r = await supabase.from('message_threads').insert({ agent_id: uid, subject: (me?.full_name || 'Agent').slice(0, 160), created_by: uid }).select('id').single()
+          if (r.error) throw r.error
+          id = r.data.id as string
+        } else {
         const title = nameOf(clients.data?.find((c) => c.id === mine)).slice(0, 160)
         const { data, error } = await supabase.from('message_threads').insert({ client_id: mine, subject: title, created_by: uid }).select('id').single()
         if (error) throw error
         id = data.id as string
+        }
       }
       const m = await supabase.from('messages').insert({ thread_id: id, sender_id: uid, body: msg })
       if (m.error) throw m.error

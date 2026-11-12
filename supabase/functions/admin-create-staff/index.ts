@@ -1,5 +1,5 @@
 // Creates a staff account. A Super Administrator may create any role; an Administrator may create
-// project managers, accountants and support officers (never administrators).
+// any role except Super Administrator.
 // The role is written to app_metadata (service role only), where the signup trigger picks it up,
 // so a user can never choose or change their own role. The new person then gets a password-setup email.
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -46,8 +46,8 @@ Deno.serve(async (req) => {
   if (!full_name) return reply(req, { error: "Full name is required" }, 400);
   if (!EMAIL.test(email) || email.length > 254) return reply(req, { error: "Enter a valid email address" }, 400);
   if (!ROLES.has(newRole)) return reply(req, { error: "Invalid role" }, 400);
-  if (caller === "admin" && !["project_manager", "accountant", "support_officer"].includes(newRole)) {
-    return reply(req, { error: "Only a Super Administrator can create administrator accounts" }, 403);
+  if (caller === "admin" && newRole === "super_admin") {
+    return reply(req, { error: "Only a Super Administrator can create a Super Administrator" }, 403);
   }
 
   // 3. Create the confirmed account with its role.

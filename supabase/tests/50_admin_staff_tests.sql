@@ -2,7 +2,8 @@
 select t.act('adm');
 select t.allowed('admin changes a staff role between non-admin roles', $q$ select public.set_user_role((select id from t.u where name='sup'), 'accountant') $q$);
 select t.allowed('...and back', $q$ select public.set_user_role((select id from t.u where name='sup'), 'support_officer') $q$);
-select t.denied('admin cannot make anyone an administrator', $q$ select public.set_user_role((select id from t.u where name='sup'), 'admin') $q$);
+select t.allowed('admin can make someone an administrator', $q$ select public.set_user_role((select id from t.u where name='sup'), 'admin') $q$);
+select t.allowed('admin can set them back to support officer', $q$ select public.set_user_role((select id from t.u where name='sup'), 'support_officer') $q$);
 select t.denied('admin cannot make anyone a super admin', $q$ select public.set_user_role((select id from t.u where name='sup'), 'super_admin') $q$);
 select t.denied('admin cannot change the super admin role', $q$ select public.set_user_role((select id from t.u where name='sa'), 'accountant') $q$);
 select t.denied('admin cannot turn an agent into staff here', $q$ select public.set_user_role((select id from t.u where name='g2'), 'accountant') $q$);

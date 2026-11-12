@@ -27,7 +27,7 @@ import AdminReports from './pages/admin/AdminReports'
 import AdminSettings from './pages/admin/AdminSettings'
 import AdminWebsite from './pages/admin/AdminWebsite'
 import AdminAgents, { AgentDetail } from './pages/admin/AdminAgents'
-import { AgentClientDetail, AgentClients, AgentCommission, AgentFiles, AgentLeads, AgentOverview, AgentProfile, AgentProjects } from './pages/agent/Agent'
+import { AgentClientDetail, AgentClients, AgentCommission, AgentFiles, AgentLeads, AgentMessages, AgentOverview, AgentProfile, AgentProjects, AgentResources } from './pages/agent/Agent'
 
 const CLIENT_NAV: NavItem[] = [
   { to: '/portal', label: 'Dashboard', icon: LayoutDashboard, end: true }, { to: '/portal/projects', label: 'My projects', icon: FolderKanban },
@@ -37,7 +37,7 @@ const CLIENT_NAV: NavItem[] = [
 const AGENT_NAV: NavItem[] = [
   { to: '/agent', label: 'Overview', icon: LayoutDashboard, end: true }, { to: '/agent/clients', label: 'My clients', icon: Users },
   { to: '/agent/projects', label: 'Projects', icon: FolderKanban }, { to: '/agent/files', label: 'Files', icon: Upload },
-  { to: '/agent/leads', label: 'Leads', icon: Target }, { to: '/agent/commission', label: 'Commission', icon: Banknote }, { to: '/agent/profile', label: 'Profile', icon: UserRound },
+  { to: '/agent/leads', label: 'Leads', icon: Target }, { to: '/agent/resources', label: 'Resources', icon: FileText }, { to: '/agent/messages', label: 'Messages', icon: MessageSquare }, { to: '/agent/commission', label: 'Commission', icon: Banknote }, { to: '/agent/profile', label: 'Profile', icon: UserRound },
 ]
 const ALL: Role[] = ['super_admin', 'admin', 'project_manager', 'accountant', 'support_officer']
 const ADMIN_NAV: (NavItem & { roles: Role[] })[] = [
@@ -101,6 +101,8 @@ export default function App() {
           <Route path="projects/:id" element={<ProjectDetail base="/agent" />} />
           <Route path="files" element={<AgentFiles />} />
           <Route path="leads" element={<AgentLeads />} />
+          <Route path="resources" element={<AgentResources />} />
+          <Route path="messages" element={<AgentMessages />} />
           <Route path="commission" element={<AgentCommission />} />
           <Route path="profile" element={<AgentProfile />} />
         </Route>

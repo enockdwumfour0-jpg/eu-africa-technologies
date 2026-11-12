@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import MessagesView from '../../components/Messages'
 import { ArrowLeft, Copy, Download, FolderKanban, MessageCircle, Plus, Trash2, Upload, Users, Wallet } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../auth/AuthContext'
@@ -9,9 +10,9 @@ import { bytes, clean, date, ghs, label } from '../../lib/format'
 import { exportCsv, type Col } from '../../lib/export'
 import type { Doc, Project } from '../../lib/types'
 
-type Overview = { clients: number; active_clients: number; active_projects: number; leads_open: number; earned: number; paid: number; pending: number; month_earned: number }
+type Overview = { clients: number; active_clients: number; active_projects: number; leads_open: number; earned: number; paid: number; pending: number; month_earned: number; month_collected: number; target: number | null; bonus_now: number; next_min: number | null; next_bonus: number | null }
 type CRow = { client_id: string; name: string; company: string | null; phone: string | null; account_status: string; joined: string; projects: number; active_projects: number; invoiced: number; paid: number; outstanding: number; commission: number }
-type Entry = { id: string; created_at: string; invoice_number: string | null; receipt_number: string | null; product: string | null; base_amount: number; rate: number; amount: number; status: string; client_id: string | null }
+type Entry = { bonus_rate?: number; id: string; created_at: string; invoice_number: string | null; receipt_number: string | null; product: string | null; base_amount: number; rate: number; amount: number; status: string; client_id: string | null }
 type Payout = { id: string; amount: number; method: string; reference: string | null; paid_at: string; note: string | null }
 type Lead = { id: string; name: string; phone: string | null; email: string | null; interest: string | null; status: string; notes: string | null; created_at: string }
 type MyAgent = { code: string; agency: string | null; default_rate: number; payout_details: string | null; agent_type: string }
@@ -31,10 +32,22 @@ export function AgentOverview() {
       <StatCard label="Commission pending" value={ghs(d.pending)} icon={<Wallet size={20} />} tone="gold" hint={`${ghs(d.month_earned)} earned this month`} />
       <StatCard label="Commission paid" value={ghs(d.paid)} icon={<Wallet size={20} />} hint={`${ghs(d.earned)} earned in total`} />
     </div>)}</Async>
+    <Async q={o}>{(d) => <Goals d={d} />}</Async>
     {me.data && <div className="card mb-5"><p className="text-sm font-semibold">Your referral link</p><p className="mt-1 break-all text-sm text-gray-600">{refLink(me.data.code)}</p><ShareButtons code={me.data.code} /></div>}
     <h2 className="mb-2 font-semibold">Recent clients</h2>
     <Async q={c} empty={(d) => d.length === 0 && <EmptyState title="No clients yet" text="Share your referral link. Clients who register with it appear here." />}>{(rows) => <ClientTable rows={rows.slice(0, 5)} />}</Async>
   </>)
+}
+
+function Goals({ d }: { d: Overview }) {
+  if (!d.target && !d.next_min && !d.bonus_now) return null
+  const pct = (v: number, of: number) => Math.min(100, Math.round((v / of) * 100))
+  return <div className="card mb-5 space-y-4">
+    <div className="flex items-baseline justify-between"><h2 className="font-semibold">This month</h2><span className="text-sm text-gray-600">Collected from your clients: <b>{ghs(d.month_collected)}</b></span></div>
+    {d.target ? <div><div className="mb-1 flex justify-between text-sm"><span>Monthly target</span><span>{ghs(d.month_collected)} of {ghs(d.target)}</span></div><Progress value={pct(d.month_collected, d.target)} /></div> : null}
+    {d.next_min ? <div><div className="mb-1 flex justify-between text-sm"><span>Next bonus tier: +{d.next_bonus} points on your rate</span><span>{ghs(d.month_collected)} of {ghs(d.next_min)}</span></div><Progress value={pct(d.month_collected, d.next_min)} /></div> : null}
+    {d.bonus_now > 0 && <p className="text-sm font-semibold text-brand-green">You currently earn a bonus of +{d.bonus_now} points on every payment this month.</p>}
+  </div>
 }
 
 function ShareButtons({ code }: { code: string }) {
@@ -176,7 +189,7 @@ export function AgentCommission() {
         <button className="btn-ghost" onClick={() => exportCsv('commission', eCols, e)}>CSV</button></div>
       {tab === 'earnings' ? <Table rows={e} empty={<EmptyState title="No commission yet" text="It appears here when a referred client makes a payment." />} cols={[
         { header: 'Date', cell: (r) => date(r.created_at) }, { header: 'Invoice', cell: (r) => r.invoice_number ?? '—' }, { header: 'Product', cell: (r) => r.product ?? '—' },
-        { header: 'Payment', cell: (r) => ghs(r.base_amount) }, { header: 'Rate', cell: (r) => r.rate + '%' }, { header: 'Commission', cell: (r) => <b>{ghs(r.amount)}</b> }, { header: 'Status', cell: (r) => <Badge s={r.status} /> }]} />
+        { header: 'Payment', cell: (r) => ghs(r.base_amount) }, { header: 'Rate', cell: (r) => r.rate + '%' + (r.bonus_rate ? ` (+${r.bonus_rate} bonus)` : '') }, { header: 'Commission', cell: (r) => <b>{ghs(r.amount)}</b> }, { header: 'Status', cell: (r) => <Badge s={r.status} /> }]} />
         : <Table rows={p} empty={<EmptyState title="No payouts yet" />} cols={[{ header: 'Date', cell: (r) => date(r.paid_at) }, { header: 'Amount', cell: (r) => <b>{ghs(r.amount)}</b> }, { header: 'Method', cell: (r) => label(r.method) }, { header: 'Reference', cell: (r) => r.reference ?? '—' }, { header: 'Note', cell: (r) => r.note ?? '—' }]} />}</>)}</Async></>)
 }
 
@@ -192,4 +205,20 @@ export function AgentProfile() {
         <Field label="Agency / company"><input className="input" maxLength={160} value={v.agency} onChange={(e) => setF({ ...v, agency: e.target.value })} /></Field>
         <Field label="Payout details" hint="Mobile money number or bank account the office should pay commission to."><textarea className="input" rows={2} maxLength={500} value={v.payout} onChange={(e) => setF({ ...v, payout: e.target.value })} /></Field>
         <div className="sm:col-span-2 flex justify-end"><button className="btn-primary" disabled={busy}>Save</button></div></form></section></div>) })()}</Async></>)
+}
+
+export function AgentMessages() {
+  return (<><PageHeader title="Messages" sub="Chat with the EU-AFRIC office." /><MessagesView mode="agent" /></>)
+}
+
+type Res = { id: string; title: string; description: string | null; category: string | null; storage_path: string; file_name: string; size_bytes: number; created_at: string }
+export function AgentResources() {
+  const q = useQuery(async () => ok(await supabase.from('agent_resources').select('*').eq('published', true).order('created_at', { ascending: false })) as Res[], [])
+  const [s, setS] = useState(''); const { toast } = useFeedback()
+  return (<><PageHeader title="Resources" sub="Brochures, price lists and other material from EU-AFRIC to help you sell." />
+    <div className="mb-3"><SearchBox value={s} onChange={setS} placeholder="Search resources" /></div>
+    <Async q={q} empty={(d) => d.length === 0 && <EmptyState title="No resources yet" text="The office will add brochures and price lists here." />}>{(rows) => <Table rows={rows.filter((r) => matches(s, r.title, r.category, r.description))} cols={[
+      { header: 'Resource', cell: (r) => <div><p className="font-semibold">{r.title}</p>{r.description && <p className="text-xs text-gray-500">{r.description}</p>}<p className="text-xs text-gray-400">{r.file_name} · {bytes(r.size_bytes)}</p></div> },
+      { header: 'Category', cell: (r) => r.category ?? '—' }, { header: 'Added', cell: (r) => date(r.created_at) },
+      { header: '', cell: (r) => <button className="btn-ghost !p-1.5" title="Download" onClick={() => openFile('agent-resources', r.storage_path, r.file_name).catch(() => toast('Could not open the file', 'err'))}><Download size={15} /></button> }]} />}</Async></>)
 }

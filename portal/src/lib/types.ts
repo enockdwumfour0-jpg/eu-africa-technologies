@@ -35,7 +35,7 @@ export type Doc = {
   clients?: Client; projects?: { title: string } | null
 }
 export type DocReview = { id: Id; document_id: Id; reviewer_id: Id; decision: string; comment: string | null; created_at: string; profiles?: { full_name: string } | null }
-export type Thread = { id: Id; client_id: Id; project_id: Id | null; subject: string; status: 'open' | 'closed'; last_message_at: string; created_at: string; clients?: Client; projects?: { title: string } | null }
+export type Thread = { id: Id; client_id: Id | null; project_id: Id | null; subject: string; status: 'open' | 'closed'; last_message_at: string; created_at: string; clients?: Client; projects?: { title: string } | null }
 export type Message = { id: Id; thread_id: Id; sender_id: Id; from_staff: boolean; body: string | null; attachment_path: string | null; attachment_name: string | null; read_at: string | null; created_at: string }
 export type Notification = { id: Id; type: string; title: string; body: string | null; link: string | null; read_at: string | null; created_at: string }
 export type Invoice = {
