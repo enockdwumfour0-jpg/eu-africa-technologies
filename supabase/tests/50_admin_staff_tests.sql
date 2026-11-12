@@ -1,0 +1,22 @@
+-- Administrators manage non-admin staff; website, payment setup and finance settings stay with the super admin.
+select t.act('adm');
+select t.allowed('admin changes a staff role between non-admin roles', $q$ select public.set_user_role((select id from t.u where name='sup'), 'accountant') $q$);
+select t.allowed('...and back', $q$ select public.set_user_role((select id from t.u where name='sup'), 'support_officer') $q$);
+select t.denied('admin cannot make anyone an administrator', $q$ select public.set_user_role((select id from t.u where name='sup'), 'admin') $q$);
+select t.denied('admin cannot make anyone a super admin', $q$ select public.set_user_role((select id from t.u where name='sup'), 'super_admin') $q$);
+select t.denied('admin cannot change the super admin role', $q$ select public.set_user_role((select id from t.u where name='sa'), 'accountant') $q$);
+select t.denied('admin cannot turn an agent into staff here', $q$ select public.set_user_role((select id from t.u where name='g2'), 'accountant') $q$);
+select t.allowed('admin suspends an accountant', $q$ select public.set_account_status((select id from t.u where name='acc'), 'suspended') $q$);
+select t.allowed('admin reactivates the accountant', $q$ select public.set_account_status((select id from t.u where name='acc'), 'active') $q$);
+select t.denied('admin cannot suspend the super admin', $q$ select public.set_account_status((select id from t.u where name='sa'), 'suspended') $q$);
+select t.allowed('admin sets a staff position', $q$ select public.set_staff_title((select id from t.u where name='pm'), 'Site Supervisor') $q$);
+select t.denied('admin cannot retitle the super admin', $q$ select public.set_staff_title((select id from t.u where name='sa'), 'Boss') $q$);
+select t.allowed('admin edits company settings', $q$ update public.app_settings set value = jsonb_set(value, '{phone}', '"0244000000"') where key = 'company' $q$);
+select t.denied('admin cannot change tax / invoice settings', $q$ update public.app_settings set value = jsonb_set(value, '{tax_rate_percent}', '15') where key = 'system' $q$);
+select t.denied('admin cannot change email settings', $q$ update public.app_settings set value = jsonb_set(value, '{reply_to}', '"x@evil.test"') where key = 'email' $q$);
+select t.denied('admin cannot change Paystack config', $q$ update public.paystack_config set enabled = true $q$);
+select t.back();
+select t.act('sa');
+select t.allowed('super admin can still change system settings', $q$ update public.app_settings set value = jsonb_set(value, '{tax_rate_percent}', '0') where key = 'system' $q$);
+select t.allowed('super admin can still add team members', $q$ insert into public.team_members(name, section) values ('Test Person', 'team') $q$);
+select t.back();

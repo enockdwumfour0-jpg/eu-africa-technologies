@@ -56,13 +56,17 @@ select t.act('pm');
 select t.denied('project manager cannot write page text', $q$ insert into public.site_content(key, page, value) values ('home.h1.1', 'home', 'hacked') $q$);
 select t.back();
 select t.act('adm');
-select t.allowed('admin edits a heading', $q$ insert into public.site_content(key, page, value) values ('home.h1.1', 'home', 'New headline') $q$);
+select t.denied('admin cannot edit page text', $q$ insert into public.site_content(key, page, value) values ('home.h1.1', 'home', 'admin attempt') $q$);
+select t.denied('admin cannot edit the team list', $q$ insert into public.team_members(name, section) values ('X', 'team') $q$);
+select t.back();
+select t.act('sa');
+select t.allowed('super admin edits a heading', $q$ insert into public.site_content(key, page, value) values ('home.h1.1', 'home', 'New headline') $q$);
 select t.denied('malformed key rejected', $q$ insert into public.site_content(key, page, value) values ('bad key', 'home', 'x') $q$);
 select t.denied('empty text rejected', $q$ insert into public.site_content(key, page, value) values ('home.h2.1', 'home', '') $q$);
 select t.denied('external image URL rejected', $q$ insert into public.site_content(key, page, value) values ('our-team.img.1', 'our-team', 'https://evil.example/x.jpg') $q$);
 select t.allowed('own-storage image accepted', $q$ insert into public.site_content(key, page, value)
   values ('our-team.img.1', 'our-team', 'https://enlkrucktzppkyxrljpr.supabase.co/storage/v1/object/public/gallery/site/1-abc.jpg') $q$);
-select t.allowed('admin resets a heading', $q$ delete from public.site_content where key = 'home.h1.1' $q$);
+select t.allowed('super admin resets a heading', $q$ delete from public.site_content where key = 'home.h1.1' $q$);
 select t.back();
 select t.eq('content edits are audited', (select (count(*) >= 2)::int::bigint from public.audit_logs where table_name = 'site_content'), 1);
 

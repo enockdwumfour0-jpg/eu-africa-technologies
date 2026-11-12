@@ -2,11 +2,14 @@ import { useState, type FormEvent } from 'react'
 import { ChevronDown, ChevronUp, Eye, EyeOff, Pencil, Plus, Trash2, Undo2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { Async, Badge, EmptyState, Field, Modal, PageHeader, Table, Tabs, ok, useAction, useFeedback, useQuery } from '../../components/ui'
+import { useAuth } from '../../auth/AuthContext'
 import { clean, dateTime, ghs, initials, num } from '../../lib/format'
 
 // Website content: enquiries, land listings and gallery that power the public site (eatl.co.com).
 export default function AdminWebsite() {
-  const [tab, setTab] = useState('text')
+  const { role } = useAuth(); const full = role === 'super_admin'
+  const [tab, setTab] = useState(full ? 'text' : 'enquiries')
+  if (!full) return (<><PageHeader title="Enquiries" sub="Messages sent through the website contact forms. Editing the website itself is for the Super Administrator." /><Enquiries /></>)
   return (<><PageHeader title="Website content" sub="Edit the text on eatl.co.com and manage the team, enquiries, land listings and gallery shown there." />
     <Tabs value={tab} onChange={setTab} tabs={[{ id: 'text', label: 'Page text' }, { id: 'team', label: 'Team' }, { id: 'enquiries', label: 'Enquiries' }, { id: 'lands', label: 'Land listings' }, { id: 'gallery', label: 'Gallery' }]} />
     {tab === 'text' ? <PageText /> : tab === 'team' ? <Team /> : tab === 'enquiries' ? <Enquiries /> : tab === 'lands' ? <Lands /> : <Gallery />}</>)
