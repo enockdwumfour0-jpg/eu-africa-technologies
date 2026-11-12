@@ -5,7 +5,7 @@ import { supabase } from '../../lib/supabase'
 import { clean } from '../../lib/format'
 import AuthLayout from './AuthLayout'
 import { Field } from '../../components/ui'
-import { passwordIssue, strength } from './password'
+import { PWNED_MESSAGE, isPwned, passwordIssue, strength } from './password'
 
 export default function Register() {
   const [f, setF] = useState({ full_name: '', email: '', phone: '', company: '', address: '', notes: '', password: '', confirm: '', website: '' })
@@ -28,6 +28,7 @@ export default function Register() {
     if (f.password !== f.confirm) return setErr('Passwords do not match.')
     if (!agree) return setErr('Please accept the privacy policy and terms.')
     setBusy(true)
+    if (await isPwned(f.password)) { setBusy(false); return setErr(PWNED_MESSAGE) }
     const { error } = await supabase.auth.signUp({
       email: f.email.trim(), password: f.password,
       options: {
