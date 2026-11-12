@@ -5,7 +5,7 @@ import { Async, Badge, Field, PageHeader, ok, useAction, useFeedback, useQuery }
 import { checkFile, signedUrl } from '../../lib/files'
 import { clean, initials } from '../../lib/format'
 import { useAuth } from '../../auth/AuthContext'
-import { passwordIssue } from '../auth/password'
+import { PWNED_MESSAGE, isPwned, passwordIssue } from '../auth/password'
 import type { Client, Profile } from '../../lib/types'
 
 export default function ClientProfile() {
@@ -37,7 +37,7 @@ function Forms({ p, c, reload }: { p: Profile; c: Client | null; reload: () => v
   }, 'Profile saved') }
   const savePrefs = () => run(async () => { const r = await supabase.from('profiles').update({ notification_prefs: prefs }).eq('id', uid); if (r.error) throw r.error }, 'Preferences saved')
   const changePw = (e: FormEvent) => { e.preventDefault(); const i = passwordIssue(pw.a); if (i) return toast(i, 'err'); if (pw.a !== pw.b) return toast('Passwords do not match', 'err')
-    run(async () => { const r = await supabase.auth.updateUser({ password: pw.a }); if (r.error) throw r.error; setPw({ a: '', b: '' }) }, 'Password changed') }
+    run(async () => { if (await isPwned(pw.a)) throw new Error(PWNED_MESSAGE); const r = await supabase.auth.updateUser({ password: pw.a }); if (r.error) throw r.error; setPw({ a: '', b: '' }) }, 'Password changed') }
   const pickAvatar = (file?: File) => { if (!file) return; const bad = checkFile(file, { images: true, maxMB: 2 }); if (bad) return toast(bad, 'err')
     run(async () => {
       const path = `${uid}/avatar-${Date.now()}.${file.type === 'image/png' ? 'png' : 'jpg'}`

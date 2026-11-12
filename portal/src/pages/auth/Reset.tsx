@@ -4,7 +4,7 @@ import { Loader2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import AuthLayout from './AuthLayout'
 import { Field } from '../../components/ui'
-import { passwordIssue } from './password'
+import { PWNED_MESSAGE, isPwned, passwordIssue } from './password'
 
 export default function Reset() {
   const nav = useNavigate()
@@ -24,6 +24,7 @@ export default function Reset() {
     const issue = passwordIssue(pw); if (issue) return setErr(issue)
     if (pw !== pw2) return setErr('Passwords do not match.')
     setBusy(true)
+    if (await isPwned(pw)) { setBusy(false); return setErr(PWNED_MESSAGE) }
     const { error } = await supabase.auth.updateUser({ password: pw })
     if (error) { setBusy(false); return setErr(error.message) }
     await supabase.auth.signOut()
