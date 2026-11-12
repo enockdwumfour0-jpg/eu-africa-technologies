@@ -83,7 +83,7 @@ select t.allowed('admin approves A', $q$ select public.review_client_application
 select t.allowed('admin approves B', $q$ select public.review_client_application((select id from t.u where name='b'), 'approved') $q$);
 select t.allowed('admin rejects C',  $q$ select public.review_client_application((select id from t.u where name='c'), 'rejected', 'incomplete details') $q$);
 select t.denied('admin cannot change own role', $q$ select public.set_user_role((select id from t.u where name='adm'), 'super_admin') $q$);
-select t.denied('admin cannot touch staff accounts', $q$ select public.set_account_status((select id from t.u where name='acc'), 'suspended') $q$);
+select t.denied('admin cannot touch super admin accounts', $q$ select public.set_account_status((select id from t.u where name='sa'), 'suspended') $q$);
 select t.back();
 select t.eq('A is active after approval', (select count(*) from public.profiles where email='a@x.test' and status='active'), 1);
 select t.eq('C is rejected', (select count(*) from public.profiles where email='c@x.test' and status='rejected'), 1);

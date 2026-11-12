@@ -18,7 +18,7 @@ export default function AdminSettings() {
     const rows = ok(await supabase.from('app_settings').select('key, value')) as { key: string; value: unknown }[]
     return Object.fromEntries(rows.map((r) => [r.key, r.value])) as unknown as Settings
   }, [])
-  const tabs = [{ id: 'company', label: 'Company' }, { id: 'notifications', label: 'Notifications' }, { id: 'email', label: 'Email' }, { id: 'system', label: 'System' }, ...(sa ? [{ id: 'staff', label: 'Staff' }, { id: 'paystack', label: 'Online payments' }] : []), { id: 'roles', label: 'Role permissions' }, { id: 'audit', label: 'Audit log' }]
+  const tabs = [{ id: 'company', label: 'Company' }, { id: 'notifications', label: 'Notifications' }, ...(sa ? [{ id: 'email', label: 'Email' }, { id: 'system', label: 'System' }] : []), { id: 'staff', label: 'Staff' }, ...(sa ? [{ id: 'paystack', label: 'Online payments' }] : []), { id: 'roles', label: 'Role permissions' }, { id: 'audit', label: 'Audit log' }]
   return (<><PageHeader title="Settings" sub="Company information, notifications, staff and system preferences." /><Tabs tabs={tabs} value={tab} onChange={setTab} />
     {tab === 'staff' ? <Staff /> : tab === 'paystack' && sa ? <PaystackSettings /> : tab === 'roles' ? <Roles /> : tab === 'audit' ? <Audit /> : <Async q={q}>{(s) => <SettingsForm tab={tab} s={s} reload={q.reload} />}</Async>}</>)
 }
@@ -46,6 +46,7 @@ function SettingsForm({ tab, s, reload }: { tab: string; s: Settings; reload: ()
 function Staff() {
   const q = useStaff(); const { run } = useAction(); const { confirm } = useFeedback(); const [add, setAdd] = useState(false); const { session } = useAuth()
   const [editTitle, setEditTitle] = useState<StaffMember | null>(null)
+  const { role: myRole } = useAuth(); const manage = (r: string) => myRole === 'super_admin' || ASSIGNABLE.includes(r as Role)
   const rpc = (fn: string, args: Record<string, unknown>, msg: string) => run(async () => { ok(await supabase.rpc(fn, args)) }, msg).then(() => q.reload())
   return (<>
     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -53,12 +54,12 @@ function Staff() {
       <button className="btn-primary" onClick={() => setAdd(true)}><Plus size={15} />Create staff account</button></div>
     <Async q={q} empty={(d) => d.length === 0 && <EmptyState title="No staff accounts" />}>{(rows) => <Table rows={rows.map((r) => ({ ...r, id: r.id }))} cols={[
       { header: 'Name', cell: (r) => <div><p className="font-semibold">{r.full_name}</p><p className="text-xs text-gray-500">{r.email}</p></div> },
-      { header: 'Position', cell: (r) => <button className="group flex items-center gap-1.5 text-left text-sm hover:text-brand-green" onClick={() => setEditTitle(r)} aria-label={`Edit position for ${r.full_name}`}>
+      { header: 'Position', cell: (r) => !manage(r.role) ? <span className="text-sm">{r.job_title || '—'}</span> : <button className="group flex items-center gap-1.5 text-left text-sm hover:text-brand-green" onClick={() => setEditTitle(r)} aria-label={`Edit position for ${r.full_name}`}>
         <span className={r.job_title ? '' : 'text-gray-400'}>{r.job_title || 'Add position'}</span><Pencil size={13} className="text-gray-400 group-hover:text-brand-green" /></button> },
-      { header: 'Access level', cell: (r) => r.id === session!.user.id ? <span>{ROLE_LABEL[r.role as Role]} <span className="text-xs text-gray-500">(you)</span></span> :
-        <select className="input !w-auto !py-1 text-xs" value={r.role} onChange={async (e) => { if (await confirm({ title: `Change role to ${ROLE_LABEL[e.target.value as Role]}?`, text: r.full_name, action: 'Change role' })) rpc('set_user_role', { p_user: r.id, p_role: e.target.value }, 'Role updated') }}>{STAFF_ROLES.map((x) => <option key={x} value={x}>{ROLE_LABEL[x]}</option>)}</select> },
+      { header: 'Access level', cell: (r) => r.id === session!.user.id || !manage(r.role) ? <span>{ROLE_LABEL[r.role as Role]} {r.id === session!.user.id && <span className="text-xs text-gray-500">(you)</span>}</span> :
+        <select className="input !w-auto !py-1 text-xs" value={r.role} onChange={async (e) => { if (await confirm({ title: `Change role to ${ROLE_LABEL[e.target.value as Role]}?`, text: r.full_name, action: 'Change role' })) rpc('set_user_role', { p_user: r.id, p_role: e.target.value }, 'Role updated') }}>{(myRole === 'super_admin' ? STAFF_ROLES : ASSIGNABLE).map((x) => <option key={x} value={x}>{ROLE_LABEL[x]}</option>)}</select> },
       { header: 'Status', cell: (r) => <Badge s={r.status} /> },
-      { header: '', cell: (r) => r.id !== session!.user.id && (r.status === 'active'
+      { header: '', cell: (r) => r.id !== session!.user.id && manage(r.role) && (r.status === 'active'
         ? <button className="btn-ghost !px-2 !py-1 text-xs" onClick={async () => { if (await confirm({ title: `Suspend ${r.full_name}?`, text: 'They lose access immediately.', action: 'Suspend', danger: true })) rpc('set_account_status', { p_user: r.id, p_status: 'suspended' }, 'Account suspended') }}>Suspend</button>
         : <button className="btn-primary !px-2 !py-1 text-xs" onClick={() => rpc('set_account_status', { p_user: r.id, p_status: 'active' }, 'Account activated')}>Activate</button>) },
     ]} />}</Async>
@@ -82,6 +83,7 @@ function EditTitle({ s, onClose, onDone }: { s: StaffMember; onClose: () => void
     <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy}>Save</button></div></form></Modal>
 }
 function NewStaff({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const { role: myRole } = useAuth()
   const [f, setF] = useState({ full_name: '', email: '', role: 'project_manager', job_title: '' }); const { run, busy } = useAction()
   const submit = async (e: FormEvent) => { e.preventDefault()
     const d = await run(async () => { const { data, error } = await supabase.functions.invoke('admin-create-staff', { body: { full_name: clean(f.full_name), email: f.email.trim(), role: f.role, job_title: clean(f.job_title) } })
@@ -91,22 +93,24 @@ function NewStaff({ onClose, onDone }: { onClose: () => void; onDone: () => void
     <Field label="Full name"><input className="input" required maxLength={120} value={f.full_name} onChange={(e) => setF({ ...f, full_name: e.target.value })} /></Field>
     <Field label="Email"><input className="input" type="email" required value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
     <PositionField value={f.job_title} onChange={(v) => setF({ ...f, job_title: v })} />
-    <Field label="Access level" hint="What they can do in the dashboard. See the Role permissions tab."><select className="input" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{STAFF_ROLES.map((x) => <option key={x} value={x}>{ROLE_LABEL[x]}</option>)}</select></Field>
+    <Field label="Access level" hint="What they can do in the dashboard. See the Role permissions tab."><select className="input" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{(myRole === 'super_admin' ? STAFF_ROLES : ASSIGNABLE).map((x) => <option key={x} value={x}>{ROLE_LABEL[x]}</option>)}</select></Field>
     <p className="text-xs text-gray-500">The new staff member receives an email to set their own password. The access level is assigned on the server and cannot be changed by the user.</p>
     <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy}>Create</button></div></form></Modal>
 }
 
+// Roles an Administrator may create and manage (administrator access itself is Super Administrator only).
+const ASSIGNABLE: Role[] = ['project_manager', 'accountant', 'support_officer']
 const AREAS = ['Clients & approvals', 'Projects & milestones', 'Project requests', 'Documents', 'Messages', 'Invoices & payments', 'Reports', 'Settings & staff', 'Website content']
 const MATRIX: Record<string, string[]> = {
   super_admin: ['Full', 'Full', 'Full', 'Full', 'Full', 'Full', 'All', 'Full', 'Full'],
-  admin: ['Full', 'Full', 'Full', 'Full', 'Full', 'Full', 'All', 'Settings only', 'Full'],
+  admin: ['Full', 'Full', 'Full', 'Full', 'Full', 'Full', 'All', 'Company, notifications, staff (not admins)', 'Enquiries only'],
   project_manager: ['—', 'Assigned only', '—', 'Assigned projects', 'Assigned projects', '—', 'Projects', '—', '—'],
   accountant: ['View', 'View', '—', '—', '—', 'Full', 'Finance', '—', '—'],
   support_officer: ['View', 'View', 'View + notes', 'View', 'Reply', '—', 'Operations', '—', '—'],
   client: ['Own account', 'Own projects', 'Submit & view own', 'Own documents', 'Own conversations', 'Own records (read)', '—', '—', '—'],
 }
 function Roles() {
-  return (<div className="space-y-3"><p className="text-sm text-gray-600">Permissions are enforced by the database (Row Level Security), not just by what the menus show. Roles can only be changed by a Super Administrator.</p>
+  return (<div className="space-y-3"><p className="text-sm text-gray-600">Permissions are enforced by the database (Row Level Security), not just by what the menus show. Administrators can create and manage project managers, accountants and support officers; only a Super Administrator can manage administrators, the website, online payments and the system and email settings.</p>
     <div className="overflow-x-auto rounded-xl border bg-white"><table className="w-full min-w-[44rem] text-left text-xs"><thead className="bg-brand-grey uppercase text-gray-500"><tr><th className="px-3 py-2">Area</th>{Object.keys(MATRIX).map((r) => <th key={r} className="px-3 py-2">{ROLE_LABEL[r as Role]}</th>)}</tr></thead>
       <tbody className="divide-y">{AREAS.map((a, i) => <tr key={a}><td className="px-3 py-2 font-semibold">{a}</td>{Object.values(MATRIX).map((v, j) => <td key={j} className={`px-3 py-2 ${v[i] === '—' ? 'text-gray-300' : ''}`}>{v[i]}</td>)}</tr>)}</tbody></table></div></div>)
 }
