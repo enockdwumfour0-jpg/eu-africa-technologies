@@ -5,7 +5,7 @@ export type Profile = {
   notification_prefs: { email: boolean; in_app: boolean }; rejection_reason: string | null
   created_at: string; approved_at: string | null
 }
-export type Client = { id: Id; profile_id: Id; company_name: string | null; address: string | null; created_at: string; profiles?: Profile }
+export type Client = { agent_id?: Id | null; id: Id; profile_id: Id; company_name: string | null; address: string | null; created_at: string; profiles?: Profile }
 export type Project = {
   id: Id; code: string; title: string; description: string | null; client_id: Id
   status: 'planning' | 'active' | 'on_hold' | 'completed' | 'cancelled'; progress: number
@@ -42,6 +42,7 @@ export type Invoice = {
   id: Id; number: string; client_id: Id; project_id: Id | null
   status: 'draft' | 'issued' | 'partially_paid' | 'paid' | 'overdue' | 'void'
   issue_date: string | null; due_date: string | null; currency: string
+  product?: string | null
   line_items: { description: string; quantity: number; unit_price: number }[]
   subtotal: number; tax: number; total: number; amount_paid: number; notes: string | null; created_at: string
   clients?: Client

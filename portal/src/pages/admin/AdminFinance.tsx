@@ -90,7 +90,7 @@ function Invoices({ d, reload }: { d: D; reload: () => void }) {
 
 type Line = { description: string; quantity: string; unit_price: string }
 function InvoiceForm({ inv, d, onClose, onDone }: { inv: Inv | null; d: D; onClose: () => void; onDone: () => void }) {
-  const [client, setClient] = useState(inv?.client_id ?? ''); const [notes, setNotes] = useState(inv?.notes ?? '')
+  const [client, setClient] = useState(inv?.client_id ?? ''); const [product, setProduct] = useState(inv?.product ?? ''); const [notes, setNotes] = useState(inv?.notes ?? '')
   const [due, setDue] = useState(inv?.due_date ?? new Date(Date.now() + d.sys.invoice_due_days * 864e5).toISOString().slice(0, 10))
   const [lines, setLines] = useState<Line[]>(inv?.line_items?.length ? inv.line_items.map((l) => ({ description: l.description, quantity: String(l.quantity), unit_price: String(l.unit_price) })) : [{ description: '', quantity: '1', unit_price: '' }])
   const { run, busy } = useAction()
@@ -101,11 +101,12 @@ function InvoiceForm({ inv, d, onClose, onDone }: { inv: Inv | null; d: D; onClo
     const items = lines.filter((l) => l.description.trim()).map((l) => ({ description: clean(l.description).slice(0, 200), quantity: num(l.quantity), unit_price: num(l.unit_price) }))
     if (!items.length) return alert('Add at least one line item.')
     const sub = Math.round(items.reduce((s, l) => s + l.quantity * l.unit_price, 0) * 100) / 100; const tx = Math.round(sub * d.sys.tax_rate_percent) / 100
-    const body = { client_id: client, due_date: due || null, line_items: items, subtotal: sub, tax: tx, total: Math.round((sub + tx) * 100) / 100, notes: clean(notes) || null }
+    const body = { client_id: client, due_date: due || null, line_items: items, subtotal: sub, tax: tx, total: Math.round((sub + tx) * 100) / 100, notes: clean(notes) || null, product: clean(product).slice(0, 80) || null }
     const r = await run(async () => { const x = inv ? await supabase.from('invoices').update(body).eq('id', inv.id) : await supabase.from('invoices').insert(body); if (x.error) throw x.error }, inv ? 'Draft saved' : 'Draft created'); if (r) onDone() }
   return <Modal title={inv ? `Edit ${inv.number}` : 'New invoice'} onClose={onClose} wide><form onSubmit={submit} className="space-y-4">
     <div className="grid gap-4 sm:grid-cols-2"><Field label="Client"><select className="input" required disabled={!!inv} value={client} onChange={(e) => setClient(e.target.value)}><option value="">Select client…</option>{d.clients.map((c) => <option key={c.id} value={c.id}>{c.profiles.full_name}</option>)}</select></Field>
-      <Field label="Due date"><input type="date" className="input" value={due} onChange={(e) => setDue(e.target.value)} /></Field></div>
+      <Field label="Due date"><input type="date" className="input" value={due} onChange={(e) => setDue(e.target.value)} /></Field>
+      <Field label="Product / service" hint="Optional. Used to work out agent commission when the client was referred by an agent."><input className="input" maxLength={80} list="inv-products" value={product} onChange={(e) => setProduct(e.target.value)} /><datalist id="inv-products">{['Building construction', 'Block supply', 'Solar installation', 'Land purchase', 'Property'].map((x) => <option key={x} value={x} />)}</datalist></Field></div>
     <div className="space-y-2"><p className="text-sm font-semibold text-gray-700">Line items (GHS)</p>
       {lines.map((l, i) => <div key={i} className="grid grid-cols-[1fr_4.5rem_6.5rem_auto] items-center gap-2"><input className="input" placeholder="Description" maxLength={200} value={l.description} onChange={(e) => setLine(i, 'description', e.target.value)} /><input className="input" type="number" min="0" step="any" aria-label="Quantity" value={l.quantity} onChange={(e) => setLine(i, 'quantity', e.target.value)} /><input className="input" type="number" min="0" step="0.01" placeholder="Price" aria-label="Unit price" value={l.unit_price} onChange={(e) => setLine(i, 'unit_price', e.target.value)} />
         <button type="button" className="p-1 text-gray-400 hover:text-red-600" aria-label="Remove line" onClick={() => setLines(lines.length > 1 ? lines.filter((_, x) => x !== i) : lines)}><Trash2 size={15} /></button></div>)}

@@ -39,7 +39,7 @@ function List() {
   )
 }
 
-export function ProjectDetail() {
+export function ProjectDetail({ base = '/portal' }: { base?: string } = {}) {
   const { id } = useParams()
   const q = useQuery(async () => {
     const [p, m, u, mem] = await Promise.all([
@@ -55,7 +55,7 @@ export function ProjectDetail() {
   }, [id])
   return (
     <>
-      <Link to="/portal/projects" className="mb-3 inline-flex items-center gap-1 text-sm font-semibold text-brand-green"><ArrowLeft size={14} />All projects</Link>
+      <Link to={`${base}/projects`} className="mb-3 inline-flex items-center gap-1 text-sm font-semibold text-brand-green"><ArrowLeft size={14} />All projects</Link>
       <Async q={q} empty={(d) => !d.project && <EmptyState title="Project not found" text="It may not be linked to your account." />}>
         {({ project: p, ms, ups, team }) => p && (
           <div className="space-y-5">

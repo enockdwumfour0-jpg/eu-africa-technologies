@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { CheckCircle2, Loader2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { clean } from '../../lib/format'
@@ -9,6 +9,8 @@ import { passwordIssue, strength } from './password'
 
 export default function Register() {
   const [f, setF] = useState({ full_name: '', email: '', phone: '', company: '', address: '', notes: '', password: '', confirm: '', website: '' })
+  const [params] = useSearchParams()
+  const ref = (params.get('ref') ?? '').replace(/[^A-Za-z0-9]/g, '').slice(0, 12).toUpperCase()
   const [agree, setAgree] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -30,7 +32,7 @@ export default function Register() {
       email: f.email.trim(), password: f.password,
       options: {
         emailRedirectTo: window.location.origin + '/login',
-        data: { full_name: name, phone, company: clean(f.company), address: clean(f.address), notes: clean(f.notes) },
+        data: { full_name: name, phone, company: clean(f.company), address: clean(f.address), notes: clean(f.notes), ...(ref ? { agent_code: ref } : {}) },
       },
     })
     setBusy(false)
