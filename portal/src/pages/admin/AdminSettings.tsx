@@ -98,19 +98,19 @@ function NewStaff({ onClose, onDone }: { onClose: () => void; onDone: () => void
     <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy}>Create</button></div></form></Modal>
 }
 
-// Roles an Administrator may create and manage (administrator access itself is Super Administrator only).
-const ASSIGNABLE: Role[] = ['project_manager', 'accountant', 'support_officer']
+// Roles an Administrator may create and manage (only the Super Administrator role is reserved).
+const ASSIGNABLE: Role[] = ['admin', 'project_manager', 'accountant', 'support_officer']
 const AREAS = ['Clients & approvals', 'Projects & milestones', 'Project requests', 'Documents', 'Messages', 'Invoices & payments', 'Reports', 'Settings & staff', 'Website content']
 const MATRIX: Record<string, string[]> = {
   super_admin: ['Full', 'Full', 'Full', 'Full', 'Full', 'Full', 'All', 'Full', 'Full'],
-  admin: ['Full', 'Full', 'Full', 'Full', 'Full', 'Full', 'All', 'Company, notifications, staff (not admins)', 'Enquiries only'],
+  admin: ['Full', 'Full', 'Full', 'Full', 'Full', 'Full', 'All', 'Company, notifications, staff', 'Enquiries only'],
   project_manager: ['—', 'Assigned only', '—', 'Assigned projects', 'Assigned projects', '—', 'Projects', '—', '—'],
   accountant: ['View', 'View', '—', '—', '—', 'Full', 'Finance', '—', '—'],
   support_officer: ['View', 'View', 'View + notes', 'View', 'Reply', '—', 'Operations', '—', '—'],
   client: ['Own account', 'Own projects', 'Submit & view own', 'Own documents', 'Own conversations', 'Own records (read)', '—', '—', '—'],
 }
 function Roles() {
-  return (<div className="space-y-3"><p className="text-sm text-gray-600">Permissions are enforced by the database (Row Level Security), not just by what the menus show. Administrators can create and manage project managers, accountants and support officers; only a Super Administrator can manage administrators, the website, online payments and the system and email settings.</p>
+  return (<div className="space-y-3"><p className="text-sm text-gray-600">Permissions are enforced by the database (Row Level Security), not just by what the menus show. Administrators can create and manage all staff except the Super Administrator. Only the Super Administrator can edit the website, online payments and the system and email settings.</p>
     <div className="overflow-x-auto rounded-xl border bg-white"><table className="w-full min-w-[44rem] text-left text-xs"><thead className="bg-brand-grey uppercase text-gray-500"><tr><th className="px-3 py-2">Area</th>{Object.keys(MATRIX).map((r) => <th key={r} className="px-3 py-2">{ROLE_LABEL[r as Role]}</th>)}</tr></thead>
       <tbody className="divide-y">{AREAS.map((a, i) => <tr key={a}><td className="px-3 py-2 font-semibold">{a}</td>{Object.values(MATRIX).map((v, j) => <td key={j} className={`px-3 py-2 ${v[i] === '—' ? 'text-gray-300' : ''}`}>{v[i]}</td>)}</tr>)}</tbody></table></div></div>)
 }

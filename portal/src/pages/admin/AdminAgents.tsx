@@ -1,15 +1,16 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Copy, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, Copy, Download, Eye, EyeOff, Plus, Trash2, Upload } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../auth/AuthContext'
 import { Async, Badge, EmptyState, Field, Modal, PageHeader, SearchBox, StatCard, Table, Tabs, matches, ok, useAction, useFeedback, useQuery } from '../../components/ui'
-import { clean, date, ghs, label, num } from '../../lib/format'
+import { ACCEPT, checkFile, openFile, upload } from '../../lib/files'
+import { bytes, clean, date, ghs, label, num } from '../../lib/format'
 import { exportCsv, type Col } from '../../lib/export'
 
 const TYPES = [['real_estate_agent', 'Real estate agent'], ['broker', 'Broker'], ['agent', 'Sales agent'], ['other', 'Other']]
 const typeLabel = (t: string) => TYPES.find((x) => x[0] === t)?.[1] ?? t
-type AgentRow = { user_id: string; code: string; agent_type: string; agency: string | null; default_rate: number; status: string; payout_details: string | null; notes: string | null; created_at: string; profiles: { full_name: string; email: string; phone: string | null } | null }
+type AgentRow = { user_id: string; code: string; agent_type: string; agency: string | null; default_rate: number; monthly_target: number | null; status: string; payout_details: string | null; notes: string | null; created_at: string; profiles: { full_name: string; email: string; phone: string | null } | null }
 type Entry = { id: string; agent_id: string; created_at: string; invoice_number: string | null; receipt_number: string | null; product: string | null; base_amount: number; rate: number; amount: number; status: string }
 type Payout = { id: string; agent_id: string; amount: number; method: string; reference: string | null; paid_at: string; note: string | null }
 const balance = (agent: string, e: Entry[], p: Payout[]) => {
@@ -20,18 +21,22 @@ const balance = (agent: string, e: Entry[], p: Payout[]) => {
 const useCanEdit = () => { const { role } = useAuth(); return role === 'super_admin' || role === 'admin' }
 
 export default function AdminAgents() {
-  const nav = useNavigate(); const canEdit = useCanEdit(); const [s, setS] = useState(''); const [add, setAdd] = useState(false)
+  const nav = useNavigate(); const canEdit = useCanEdit(); const [s, setS] = useState(''); const [add, setAdd] = useState(false); const [tab, setTab] = useState('agents')
   const q = useQuery(async () => {
     const [a, e, p, c] = await Promise.all([supabase.from('agents').select('*, profiles(full_name, email, phone)').order('created_at', { ascending: false }),
       supabase.from('commission_entries').select('*'), supabase.from('commission_payouts').select('*'), supabase.from('clients').select('id, agent_id').not('agent_id', 'is', null)])
     return { a: ok(a) as unknown as AgentRow[], e: ok(e) as Entry[], p: ok(p) as Payout[], c: ok(c) as { id: string; agent_id: string }[] } }, [])
   return (<>
     <PageHeader title="Agents" sub="Agents and brokers, their commission rates and what they are owed." actions={canEdit && <button className="btn-primary" onClick={() => setAdd(true)}><Plus size={16} />New agent</button>} />
-    <div className="mb-3"><SearchBox value={s} onChange={setS} placeholder="Search agents" /></div>
+    <Tabs value={tab} onChange={setTab} tabs={[{ id: 'agents', label: 'Agents' }, { id: 'tiers', label: 'Bonus tiers' }, { id: 'resources', label: 'Resources' }]} />
+    {tab === 'tiers' && <Tiers canEdit={canEdit} />}
+    {tab === 'resources' && <Resources canEdit={canEdit} />}
+    {tab === 'agents' && <><div className="mb-3"><SearchBox value={s} onChange={setS} placeholder="Search agents" /></div>
     <Async q={q} empty={(d) => d.a.length === 0 && <EmptyState title="No agents yet" text="Create an agent account. They get an email to set their password and a referral link." />}>{({ a, e, p, c }) => <Table rows={a.map((x) => ({ ...x, id: x.user_id })).filter((x) => matches(s, x.profiles?.full_name, x.profiles?.email, x.agency, x.code))} onRow={(x) => nav(`/admin/agents/${x.user_id}`)} cols={[
       { header: 'Agent', cell: (x) => <div><p className="font-semibold">{x.profiles?.full_name || '—'}</p><p className="text-xs text-gray-500">{typeLabel(x.agent_type)}{x.agency ? ` · ${x.agency}` : ''}</p></div> },
       { header: 'Code', cell: (x) => x.code }, { header: 'Clients', cell: (x) => c.filter((k) => k.agent_id === x.user_id).length }, { header: 'Rate', cell: (x) => x.default_rate + '%' },
       { header: 'Earned', cell: (x) => ghs(balance(x.user_id, e, p).earned) }, { header: 'Owed', cell: (x) => <b>{ghs(balance(x.user_id, e, p).owed)}</b> }, { header: 'Status', cell: (x) => <Badge s={x.status} /> }]} />}</Async>
+    </>}
     {add && <NewAgent onClose={() => setAdd(false)} onDone={() => { setAdd(false); q.reload() }} />}
   </>)
 }
@@ -104,12 +109,55 @@ function PayoutForm({ agent, owed, onClose, onDone }: { agent: string; owed: num
 }
 
 function EditAgent({ a, onClose, onDone }: { a: AgentRow; onClose: () => void; onDone: () => void }) {
-  const [f, setF] = useState({ agent_type: a.agent_type, agency: a.agency ?? '', default_rate: String(a.default_rate), notes: a.notes ?? '' }); const { run, busy } = useAction()
-  const submit = async (e: FormEvent) => { e.preventDefault(); const d = await run(async () => { ok(await supabase.from('agents').update({ agent_type: f.agent_type, agency: clean(f.agency) || null, default_rate: num(f.default_rate), notes: clean(f.notes) || null }).eq('user_id', a.user_id)) }, 'Agent updated'); if (d) onDone() }
+  const [f, setF] = useState({ agent_type: a.agent_type, agency: a.agency ?? '', default_rate: String(a.default_rate), monthly_target: a.monthly_target == null ? '' : String(a.monthly_target), notes: a.notes ?? '' }); const { run, busy } = useAction()
+  const submit = async (e: FormEvent) => { e.preventDefault(); const d = await run(async () => { ok(await supabase.from('agents').update({ agent_type: f.agent_type, agency: clean(f.agency) || null, default_rate: num(f.default_rate), monthly_target: f.monthly_target === '' ? null : num(f.monthly_target), notes: clean(f.notes) || null }).eq('user_id', a.user_id)) }, 'Agent updated'); if (d) onDone() }
   return <Modal title="Edit agent" onClose={onClose} small><form onSubmit={submit} className="space-y-4">
     <Field label="Type"><select className="input" value={f.agent_type} onChange={(e) => setF({ ...f, agent_type: e.target.value })}>{TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field>
     <Field label="Agency / company"><input className="input" maxLength={160} value={f.agency} onChange={(e) => setF({ ...f, agency: e.target.value })} /></Field>
     <Field label="Standard commission rate (%)" hint="Changes apply to future payments only; past commission keeps the rate it was earned at."><input className="input" type="number" min="0" max="100" step="0.01" required value={f.default_rate} onChange={(e) => setF({ ...f, default_rate: e.target.value })} /></Field>
+    <Field label="Monthly target (GHS)" hint="Optional. Shown to the agent as a progress bar for payments collected from their clients each month."><input className="input" type="number" min="0" step="0.01" value={f.monthly_target} onChange={(e) => setF({ ...f, monthly_target: e.target.value })} /></Field>
     <Field label="Internal notes"><textarea className="input" rows={2} maxLength={1000} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></Field>
     <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy}>Save</button></div></form></Modal>
+}
+
+type Tier = { id: string; min_monthly: number; bonus_rate: number }
+function Tiers({ canEdit }: { canEdit: boolean }) {
+  const q = useQuery(async () => ok(await supabase.from('commission_tiers').select('*').order('min_monthly')) as Tier[], [])
+  const [min, setMin] = useState(''); const [bonus, setBonus] = useState(''); const { run, busy } = useAction()
+  return (<div className="space-y-3"><p className="max-w-2xl text-sm text-gray-600">A bonus tier adds extra percentage points to an agent's commission rate once the payments collected from their clients in a calendar month reach the amount. The highest tier reached applies, from the payment that crosses it onwards.</p>
+    <Async q={q} empty={(d) => d.length === 0 && <EmptyState title="No tiers yet" text="Without tiers every agent simply earns their normal rate." />}>{(rows) => <Table rows={rows} cols={[
+      { header: 'Collected in a month', cell: (t) => <>{ghs(t.min_monthly)} or more</> }, { header: 'Bonus', cell: (t) => <b>+{t.bonus_rate} points</b> },
+      { header: '', cell: (t) => canEdit && <button className="btn-ghost !p-1.5 text-red-600" onClick={async () => { await run(async () => { ok(await supabase.from('commission_tiers').delete().eq('id', t.id)) }, 'Tier removed'); q.reload() }}><Trash2 size={15} /></button> }]} />}</Async>
+    {canEdit && <form className="flex flex-wrap items-end gap-2" onSubmit={async (e) => { e.preventDefault(); const d = await run(async () => { const { error } = await supabase.from('commission_tiers').insert({ min_monthly: num(min), bonus_rate: num(bonus) }); if (error) throw new Error(/duplicate|unique/i.test(error.message) ? 'There is already a tier at that amount' : error.message) }, 'Tier added'); if (d) { setMin(''); setBonus(''); q.reload() } }}>
+      <Field label="Collected in a month (GHS)"><input className="input w-44" type="number" required min="1" step="0.01" value={min} onChange={(e) => setMin(e.target.value)} /></Field>
+      <Field label="Bonus (percentage points)"><input className="input w-36" type="number" required min="0.01" max="50" step="0.01" value={bonus} onChange={(e) => setBonus(e.target.value)} /></Field>
+      <button className="btn-primary" disabled={busy}><Plus size={15} />Add tier</button></form>}</div>)
+}
+
+type Res = { id: string; title: string; description: string | null; category: string | null; storage_path: string; file_name: string; mime_type: string; size_bytes: number; published: boolean; created_at: string }
+function Resources({ canEdit }: { canEdit: boolean }) {
+  const q = useQuery(async () => ok(await supabase.from('agent_resources').select('*').order('created_at', { ascending: false })) as Res[], [])
+  const [add, setAdd] = useState(false); const { run } = useAction(); const { confirm, toast } = useFeedback()
+  return (<div className="space-y-3"><div className="flex items-center justify-between gap-2"><p className="text-sm text-gray-600">Files every agent can download: brochures, price lists, forms.</p>{canEdit && <button className="btn-primary" onClick={() => setAdd(true)}><Upload size={16} />Add resource</button>}</div>
+    <Async q={q} empty={(d) => d.length === 0 && <EmptyState title="No resources yet" />}>{(rows) => <Table rows={rows} cols={[
+      { header: 'Resource', cell: (r) => <div><p className="font-semibold">{r.title}</p><p className="text-xs text-gray-500">{r.file_name} · {bytes(r.size_bytes)}</p></div> },
+      { header: 'Category', cell: (r) => r.category ?? '—' }, { header: 'Added', cell: (r) => date(r.created_at) }, { header: 'Visible to agents', cell: (r) => <Badge s={r.published ? 'active' : 'draft'} text={r.published ? 'Yes' : 'Hidden'} /> },
+      { header: '', cell: (r) => <div className="flex gap-1"><button className="btn-ghost !p-1.5" title="Download" onClick={() => openFile('agent-resources', r.storage_path, r.file_name).catch(() => toast('Could not open the file', 'err'))}><Download size={15} /></button>
+        {canEdit && <><button className="btn-ghost !p-1.5" title={r.published ? 'Hide from agents' : 'Show to agents'} onClick={async () => { await run(async () => { ok(await supabase.from('agent_resources').update({ published: !r.published }).eq('id', r.id)) }); q.reload() }}>{r.published ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+          <button className="btn-ghost !p-1.5 text-red-600" title="Delete" onClick={async () => { if (await confirm({ title: `Delete ${r.title}?`, action: 'Delete', danger: true })) { await run(async () => { ok(await supabase.from('agent_resources').delete().eq('id', r.id)); await supabase.storage.from('agent-resources').remove([r.storage_path]) }, 'Resource deleted'); q.reload() } }}><Trash2 size={15} /></button></>}</div> }]} />}</Async>
+    {add && <ResourceForm onClose={() => setAdd(false)} onDone={() => { setAdd(false); q.reload() }} />}</div>)
+}
+function ResourceForm({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const [title, setTitle] = useState(''); const [desc, setDesc] = useState(''); const [cat, setCat] = useState('Brochures'); const [file, setFile] = useState<File | null>(null); const { run, busy } = useAction(); const { toast } = useFeedback()
+  const submit = async (e: FormEvent) => { e.preventDefault(); if (!file) return
+    const bad = checkFile(file); if (bad) return toast(bad, 'err')
+    const d = await run(async () => { const path = await upload('agent-resources', 'files', file)
+      const { error } = await supabase.from('agent_resources').insert({ title: clean(title), description: clean(desc) || null, category: cat, storage_path: path, file_name: file.name.slice(0, 200), mime_type: file.type, size_bytes: file.size })
+      if (error) { await supabase.storage.from('agent-resources').remove([path]); throw error } }, 'Resource added. Agents were notified.'); if (d) onDone() }
+  return <Modal title="Add a resource" onClose={onClose} small><form onSubmit={submit} className="space-y-4">
+    <Field label="Title"><input className="input" required maxLength={160} value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
+    <Field label="Category"><select className="input" value={cat} onChange={(e) => setCat(e.target.value)}>{['Brochures', 'Price lists', 'Forms', 'Training', 'Other'].map((x) => <option key={x}>{x}</option>)}</select></Field>
+    <Field label="Description"><input className="input" maxLength={500} value={desc} onChange={(e) => setDesc(e.target.value)} /></Field>
+    <Field label="File" hint="PDF, DOCX, XLSX, JPG or PNG, up to 20 MB."><input className="input" type="file" required accept={ACCEPT} onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></Field>
+    <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy || !file}>Upload</button></div></form></Modal>
 }
