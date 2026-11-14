@@ -15,20 +15,27 @@ type Led = LedgerEntry & { clients: { profiles: { full_name: string } } | null }
 const cname = (c: { company_name?: string | null; profiles?: { full_name: string } } | null | undefined) => c?.profiles?.full_name || c?.company_name || '—'
 const owed = (i: Invoice) => Number(i.total) - Number(i.amount_paid)
 
+// The commission columns are not selectable by admins/accountants (database privileges); the Super Administrator gets them from an RPC.
+const ONLINE_COLS = 'id, reference, amount, fees, channel, status, settled_as, created_at, paid_at, note'
+
 export default function AdminFinance() {
   const [tab, setTab] = useState('invoices')
+  const { role } = useAuth()
   const q = useQuery(async () => {
-    const [i, p, l, c, set, dp, op] = await Promise.all([
+    const [i, p, l, c, set, dp, op, cm] = await Promise.all([
       supabase.from('invoices').select('*, clients(company_name, profiles(full_name))').order('created_at', { ascending: false }),
       supabase.from('payments').select('*, invoices(number), clients(profiles(full_name))').order('paid_at', { ascending: false }),
       supabase.from('ledger_entries').select('*, ledger_accounts(code, name), clients(profiles(full_name))').order('created_at', { ascending: true }),
       supabase.from('clients').select('id, company_name, profiles!inner(full_name, status)').eq('profiles.status', 'active'),
       supabase.from('app_settings').select('value').eq('key', 'system').maybeSingle(),
       supabase.from('deposits').select('*, clients(company_name, profiles(full_name))').order('paid_at', { ascending: false }),
-      supabase.from('online_payments').select('*, clients(company_name, profiles(full_name)), invoices(number)').order('created_at', { ascending: false }).limit(300),
+      supabase.from('online_payments').select(`${ONLINE_COLS}, clients(company_name, profiles(full_name)), invoices(number)`).order('created_at', { ascending: false }).limit(300),
+      role === 'super_admin' ? supabase.rpc('online_payment_commissions') : Promise.resolve({ data: [] as { id: string; commission: number }[], error: null }),
     ])
-    return { onl: ok(op) as unknown as Onl[], dep: ok(dp) as unknown as Dep[], inv: ok(i) as unknown as Inv[], pay: ok(p) as unknown as Pay[], led: ok(l) as unknown as Led[], clients: ok(c) as unknown as (Client & { profiles: { full_name: string } })[], sys: (set.data?.value ?? { invoice_due_days: 14, tax_rate_percent: 0 }) as { invoice_due_days: number; tax_rate_percent: number } }
-  }, [])
+    const commissions = new Map(((cm.data ?? []) as { id: string; commission: number }[]).map((x) => [x.id, Number(x.commission)]))
+    const onl = (ok(op) as unknown as Onl[]).map((r) => ({ ...r, commission: commissions.get(r.id) ?? 0 }))
+    return { onl, dep: ok(dp) as unknown as Dep[], inv: ok(i) as unknown as Inv[], pay: ok(p) as unknown as Pay[], led: ok(l) as unknown as Led[], clients: ok(c) as unknown as (Client & { profiles: { full_name: string } })[], sys: (set.data?.value ?? { invoice_due_days: 14, tax_rate_percent: 0 }) as { invoice_due_days: number; tax_rate_percent: number } }
+  }, [role])
   return (
     <>
       <PageHeader title="Finance" sub="Invoices, payments, receipts and the client ledger. Every transaction is audited." />
