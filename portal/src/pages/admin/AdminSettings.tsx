@@ -110,9 +110,11 @@ const MATRIX: Record<string, string[]> = {
   client: ['Own account', 'Own projects', 'Submit & view own', 'Own documents', 'Own conversations', 'Own records (read)', '—', '—', '—'],
 }
 function Roles() {
-  return (<div className="space-y-3"><p className="text-sm text-gray-600">Permissions are enforced by the database (Row Level Security), not just by what the menus show. Administrators can create and manage all staff except the Super Administrator. Only the Super Administrator can edit the website, online payments and the system and email settings.</p>
-    <div className="overflow-x-auto rounded-xl border bg-white"><table className="w-full min-w-[44rem] text-left text-xs"><thead className="bg-brand-grey uppercase text-gray-500"><tr><th className="px-3 py-2">Area</th>{Object.keys(MATRIX).map((r) => <th key={r} className="px-3 py-2">{ROLE_LABEL[r as Role]}</th>)}</tr></thead>
-      <tbody className="divide-y">{AREAS.map((a, i) => <tr key={a}><td className="px-3 py-2 font-semibold">{a}</td>{Object.values(MATRIX).map((v, j) => <td key={j} className={`px-3 py-2 ${v[i] === '—' ? 'text-gray-300' : ''}`}>{v[i]}</td>)}</tr>)}</tbody></table></div></div>)
+  const { role } = useAuth(); const sa = role === 'super_admin'
+  const cols = Object.keys(MATRIX).filter((r) => sa || r !== 'super_admin') // the Super Administrator column is not shown to anyone else
+  return (<div className="space-y-3"><p className="text-sm text-gray-600">Permissions are enforced by the database (Row Level Security), not just by what the menus show.{sa ? ' Administrators can create and manage all staff except the Super Administrator. Only the Super Administrator can edit the website, online payments and the system and email settings.' : ''}</p>
+    <div className="overflow-x-auto rounded-xl border bg-white"><table className="w-full min-w-[44rem] text-left text-xs"><thead className="bg-brand-grey uppercase text-gray-500"><tr><th className="px-3 py-2">Area</th>{cols.map((r) => <th key={r} className="px-3 py-2">{ROLE_LABEL[r as Role]}</th>)}</tr></thead>
+      <tbody className="divide-y">{AREAS.map((a, i) => <tr key={a}><td className="px-3 py-2 font-semibold">{a}</td>{cols.map((r) => { const v = MATRIX[r]; return <td key={r} className={`px-3 py-2 ${v[i] === '—' ? 'text-gray-300' : ''}`}>{v[i]}</td> })}</tr>)}</tbody></table></div></div>)
 }
 
 function Audit() {

@@ -9,7 +9,7 @@ import { clean, dateTime, ghs, initials, num } from '../../lib/format'
 export default function AdminWebsite() {
   const { role } = useAuth(); const full = role === 'super_admin'
   const [tab, setTab] = useState(full ? 'text' : 'enquiries')
-  if (!full) return (<><PageHeader title="Enquiries" sub="Messages sent through the website contact forms. Editing the website itself is for the Super Administrator." /><Enquiries /></>)
+  if (!full) return (<><PageHeader title="Enquiries" sub="Messages sent through the website contact forms." /><Enquiries /></>)
   return (<><PageHeader title="Website content" sub="Edit the text on eatl.co.com and manage the team, enquiries, land listings and gallery shown there." />
     <Tabs value={tab} onChange={setTab} tabs={[{ id: 'text', label: 'Page text' }, { id: 'team', label: 'Team' }, { id: 'enquiries', label: 'Enquiries' }, { id: 'lands', label: 'Land listings' }, { id: 'gallery', label: 'Gallery' }]} />
     {tab === 'text' ? <PageText /> : tab === 'team' ? <Team /> : tab === 'enquiries' ? <Enquiries /> : tab === 'lands' ? <Lands /> : <Gallery />}</>)
