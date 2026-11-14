@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowLeft, Check, CheckCheck, FileText, Lock, MessageSquarePlus, MessagesSquare, Paperclip, Send, X } from 'lucide-react'
+import { ArrowLeft, Check, CheckCheck, FileText, Lock, MessageSquarePlus, MessagesSquare, Paperclip, Send, Trash2, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthContext'
 import { ACCEPT, checkFile, openFile, upload } from '../lib/files'
@@ -8,7 +8,13 @@ import type { Client, Message, Thread } from '../lib/types'
 import { EmptyState, Field, Modal, SearchBox, Spinner, matches, ok, useAction, useFeedback, useQuery } from './ui'
 
 type Mode = 'client' | 'staff' | 'agent'
-type ThreadRow = Thread & { agent_id?: string | null; agent?: { full_name: string } | null; clients?: Client & { profiles?: { full_name: string } } }
+type Person = { full_name: string; job_title?: string | null }
+type ThreadRow = Thread & { agent_id?: string | null; staff_id?: string | null; agent?: Person | null; staff?: Person | null; clients?: Client & { profiles?: { full_name: string } } }
+type Parties = { thread_id: string; agent_name: string | null; staff_name: string | null; staff_title: string | null; client_name: string | null; client_company: string | null }
+// The four kinds of conversation: client<->team, agent<->office, agent<->chosen staff member, agent<->own client.
+type Kind = 'team' | 'office' | 'agent_staff' | 'agent_client'
+const kindOf = (t: ThreadRow): Kind => (t.staff_id ? 'agent_staff' : t.agent_id && t.client_id ? 'agent_client' : t.agent_id ? 'office' : 'team')
+const clientName = (t: ThreadRow) => t.clients?.profiles?.full_name || t.clients?.company_name || 'Client'
 type Last = { thread_id: string; body: string | null; attachment_name: string | null; sender_id: string; created_at: string; read_at: string | null }
 
 // One tick = sent, two blue ticks = read by the other person.
@@ -27,7 +33,22 @@ function Avatar({ name, size = 'h-12 w-12 text-sm', team }: { name: string; size
   )
 }
 
-const personName = (t: ThreadRow, mode: Mode) => (mode === 'staff' ? (t.agent_id ? t.agent?.full_name || 'Agent' : t.clients?.profiles?.full_name || t.clients?.company_name || 'Client') : 'EU-AFRIC Team')
+// Who the other side of the conversation is, from the point of view of the person looking at it.
+function personName(t: ThreadRow, mode: Mode, uid: string) {
+  const k = kindOf(t); const agent = t.agent?.full_name || 'Agent'
+  if (k === 'agent_staff') return uid === t.agent_id ? t.staff?.full_name || 'Staff' : uid === t.staff_id ? agent : `${agent} ↔ ${t.staff?.full_name || 'Staff'}`
+  if (k === 'agent_client') return mode === 'client' ? agent : uid === t.agent_id ? clientName(t) : `${agent} ↔ ${clientName(t)}`
+  if (mode === 'staff') return k === 'office' ? agent : clientName(t)
+  return 'EU-AFRIC Team'
+}
+const isTeamChat = (t: ThreadRow, mode: Mode) => mode !== 'staff' && (kindOf(t) === 'team' || kindOf(t) === 'office')
+function subtitle(t: ThreadRow, mode: Mode, uid: string, name: string) {
+  const k = kindOf(t)
+  if (k === 'agent_staff') return uid === t.agent_id ? t.staff?.job_title || 'EU-AFRIC staff' : uid === t.staff_id ? 'Agent' : 'Agent chat with staff'
+  if (k === 'agent_client') return mode === 'client' ? 'Your agent' : uid === t.agent_id ? (t.clients?.company_name && t.clients.company_name !== name ? t.clients.company_name : 'Your client') : 'Agent and client'
+  if (mode === 'staff') return k === 'office' ? 'Agent' : t.clients?.company_name && t.clients.company_name !== name ? t.clients.company_name : 'Client'
+  return 'Replies from the EU-AFRIC team'
+}
 
 export default function MessagesView({ mode, canStart = true, onlyClientId }: { mode: Mode; canStart?: boolean; onlyClientId?: string }) {
   const { session } = useAuth()
@@ -38,12 +59,27 @@ export default function MessagesView({ mode, canStart = true, onlyClientId }: { 
   const [creating, setCreating] = useState(false)
 
   const threads = useQuery(async () => {
-    let query = supabase.from('message_threads').select('*, clients(id, company_name, profiles(full_name)), agent:profiles!agent_id(full_name)').order('last_message_at', { ascending: false })
+    let query = supabase.from('message_threads').select('*, clients(id, company_name, profiles(full_name))').order('last_message_at', { ascending: false })
     if (onlyClientId) query = query.eq('client_id', onlyClientId)
     const t = ok(await query) as unknown as ThreadRow[]
-    const un = ok(await supabase.from('messages').select('thread_id').is('read_at', null).eq('from_staff', mode !== 'staff')) as { thread_id: string }[]
+    // names of the agent / staff member / client in agent chats (profiles are not readable by every role, so they come from the database function)
+    const parties = new Map((ok(await supabase.rpc('chat_parties')) as unknown as Parties[]).map((p) => [p.thread_id, p]))
+    t.forEach((th) => {
+      const p = parties.get(th.id); if (!p) return
+      th.agent = th.agent_id ? { full_name: p.agent_name || 'Agent' } : null
+      th.staff = th.staff_id ? { full_name: p.staff_name || 'Staff', job_title: p.staff_title } : null
+      if (th.client_id && p.client_name) th.clients = { ...(th.clients ?? { id: th.client_id }), company_name: p.client_company, profiles: { full_name: p.client_name } } as unknown as ThreadRow['clients']
+    })
+    const byId = new Map(t.map((x) => [x.id, x]))
+    const un = ok(await supabase.from('messages').select('thread_id, sender_id, from_staff').is('read_at', null)) as { thread_id: string; sender_id: string; from_staff: boolean }[]
     const counts: Record<string, number> = {}
-    un.forEach((m) => { counts[m.thread_id] = (counts[m.thread_id] ?? 0) + 1 })
+    un.forEach((m) => {
+      const th = byId.get(m.thread_id); if (!th) return
+      const k = kindOf(th)
+      // agent chats are between two people: count what the other person sent (a bystander administrator has no unread count)
+      const count = k === 'agent_staff' || k === 'agent_client' ? m.sender_id !== uid && (mode === 'client' || uid === th.agent_id || uid === th.staff_id) : m.from_staff === (mode !== 'staff')
+      if (count) counts[m.thread_id] = (counts[m.thread_id] ?? 0) + 1
+    })
     // newest message per thread, for the preview line in the list
     const recent = ok(await supabase.from('messages').select('thread_id, body, attachment_name, sender_id, created_at, read_at').order('created_at', { ascending: false }).limit(500)) as Last[]
     const last: Record<string, Last> = {}
@@ -58,7 +94,7 @@ export default function MessagesView({ mode, canStart = true, onlyClientId }: { 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid])
 
-  const rows = (threads.data?.t ?? []).filter((t) => matches(q, t.clients?.profiles?.full_name, t.clients?.company_name, t.agent?.full_name, mode !== 'staff' ? 'EU-AFRIC Team' : ''))
+  const rows = (threads.data?.t ?? []).filter((t) => matches(q, t.clients?.profiles?.full_name, t.clients?.company_name, t.agent?.full_name, t.staff?.full_name, mode !== 'staff' && !t.staff_id && !(t.agent_id && t.client_id) ? 'EU-AFRIC Team' : ''))
   const active = threads.data?.t.find((t) => t.id === sel) ?? null
 
   return (
@@ -70,8 +106,8 @@ export default function MessagesView({ mode, canStart = true, onlyClientId }: { 
           <div className="hidden flex-1 md:block"><SearchBox value={q} onChange={setQ} placeholder="Search chats" /></div>
           {canStart && <button className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand-green text-white shadow-sm transition hover:bg-[#126b39]" aria-label="New chat" title="New chat"
             onClick={() => {
-              // a client has one chat with the team: open it instead of making another
-              const mine = mode !== 'staff' ? threads.data?.t.find((t) => t.status === 'open') : undefined
+              // a client has one chat with the team: open it instead of making another (agents choose who to message)
+              const mine = mode === 'client' ? threads.data?.t.find((t) => t.status === 'open' && kindOf(t) === 'team') : undefined
               if (mine) setSel(mine.id); else setCreating(true)
             }}><MessageSquarePlus size={18} /></button>}
         </div>
@@ -88,12 +124,12 @@ export default function MessagesView({ mode, canStart = true, onlyClientId }: { 
               rows.map((t) => {
                 const n = threads.data?.counts[t.id] ?? 0
                 const l = threads.data?.last[t.id]
-                const name = personName(t, mode)
+                const name = personName(t, mode, uid)
                 const mineLast = !!l && l.sender_id === uid
                 const preview = l ? (l.body || (l.attachment_name ? '📎 ' + l.attachment_name : '')) : 'No messages yet'
                 return (
                   <button key={t.id} onClick={() => setSel(t.id)} className={`flex w-full items-center gap-3 border-b border-gray-100 px-3 py-3 text-left transition hover:bg-gray-50 ${sel === t.id ? 'bg-brand-green/10' : ''}`}>
-                    <Avatar name={name} team={mode !== 'staff'} />
+                    <Avatar name={name} team={isTeamChat(t, mode)} />
                     <span className="min-w-0 flex-1">
                       <span className="flex items-baseline justify-between gap-2">
                         <span className={`truncate text-[15px] ${n ? 'font-bold' : 'font-semibold'} text-brand-black`}>{name}</span>
@@ -131,12 +167,28 @@ function Conversation({ thread, mode, uid, back, onChanged, onClose }: { thread:
   const [text, setText] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const { run, busy } = useAction()
-  const { toast } = useFeedback()
+  const { toast, confirm } = useFeedback()
+  const kind = kindOf(thread)
   const end = useRef<HTMLDivElement>(null)
   const box = useRef<HTMLTextAreaElement>(null)
   const first = useRef(true)
 
-  const markRead = useCallback(() => { supabase.rpc('mark_thread_read', { p_thread: thread.id }).then(() => onChanged()) }, [thread.id])
+  const markRead = useCallback(() => {
+    supabase.rpc('mark_thread_read', { p_thread: thread.id }).then(async () => {
+      onChanged()
+      // refresh our copy of the read state, so the ticks and the Delete option are up to date
+      const { data } = await supabase.from('messages').select('id, read_at').eq('thread_id', thread.id)
+      const r = new Map(((data ?? []) as { id: string; read_at: string | null }[]).map((x) => [x.id, x.read_at]))
+      setMsgs((l) => l.map((x) => (r.has(x.id) ? { ...x, read_at: r.get(x.id) ?? null } : x)))
+    })
+  }, [thread.id])
+  // Delete a message for yourself only: the other people in the chat keep it. You can delete messages you sent or have read.
+  async function removeMsg(m: Message) {
+    if (!(await confirm({ title: 'Delete this message?', text: 'It is removed from your chat only. The other people in the chat still see it.', action: 'Delete', danger: true }))) return
+    const { error } = await supabase.from('message_hides').insert({ message_id: m.id })
+    if (error) return toast('Could not delete the message', 'err')
+    setMsgs((l) => l.filter((x) => x.id !== m.id)); onChanged()
+  }
   useEffect(() => {
     supabase.from('messages').select('*').eq('thread_id', thread.id).order('created_at').then(({ data }) => { setMsgs((data as Message[]) ?? []); setLoading(false); markRead() })
     const ch = supabase.channel('msg-' + thread.id)
@@ -176,15 +228,18 @@ function Conversation({ thread, mode, uid, back, onChanged, onClose }: { thread:
     })
     if (done) { setText(''); setFile(null); onChanged(); box.current?.focus() }
   }
-  const name = personName(thread, mode)
+  const name = personName(thread, mode, uid)
+  const delBtn = (m: Message) => (
+    <button type="button" onClick={() => removeMsg(m)} aria-label="Delete message" title="Delete message"
+      className="mb-1 shrink-0 self-center rounded-full p-1.5 text-gray-400 opacity-0 transition hover:bg-red-50 hover:text-red-600 focus:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"><Trash2 size={14} /></button>)
   return (
     <>
       <div className="flex items-center gap-3 border-b bg-white px-3 py-2.5">
         <button className="-ml-1 rounded-full p-2 text-gray-600 hover:bg-gray-100 md:hidden" onClick={back} aria-label="Back to chats"><ArrowLeft size={20} /></button>
-        <Avatar name={name} size="h-10 w-10 text-xs" team={mode !== 'staff'} />
+        <Avatar name={name} size="h-10 w-10 text-xs" team={isTeamChat(thread, mode)} />
         <div className="min-w-0 flex-1">
           <p className="truncate font-semibold leading-tight text-brand-black">{name}</p>
-          <p className="truncate text-xs text-gray-500">{mode === 'staff' ? (thread.agent_id ? 'Agent' : thread.clients?.company_name && thread.clients.company_name !== name ? thread.clients.company_name : 'Client') : 'Replies from the EU-AFRIC team'}</p>
+          <p className="truncate text-xs text-gray-500">{subtitle(thread, mode, uid, name)}</p>
         </div>
         {thread.status === 'closed'
           ? <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-600"><Lock size={12} />Closed</span>
@@ -200,9 +255,10 @@ function Conversation({ thread, mode, uid, back, onChanged, onClose }: { thread:
           return (
             <Fragment key={m.id}>
               {newDay && <div className="my-3 flex justify-center"><span className="rounded-lg bg-white/90 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500 shadow-sm">{dayLabel(m.created_at)}</span></div>}
-              <div className={`flex ${mine ? 'justify-end' : 'justify-start'} ${startOfRun ? 'mt-2' : 'mt-0.5'}`}>
+              <div className={`group flex items-end gap-1 ${mine ? 'justify-end' : 'justify-start'} ${startOfRun ? 'mt-2' : 'mt-0.5'}`}>
+                {mine && delBtn(m)}
                 <div className={`relative max-w-[82%] rounded-2xl px-3 pb-1.5 pt-2 text-[15px] leading-snug shadow-[0_1px_1px_rgba(0,0,0,.12)] sm:max-w-[70%] ${mine ? 'bg-[#dcf8c6] text-brand-black' : 'bg-white text-brand-black'} ${startOfRun ? (mine ? 'rounded-tr-sm' : 'rounded-tl-sm') : ''}`}>
-                  {!mine && startOfRun && m.from_staff && <p className="mb-0.5 text-xs font-bold text-brand-green">EU-AFRIC</p>}
+                  {!mine && startOfRun && m.from_staff && <p className="mb-0.5 text-xs font-bold text-brand-green">{kind === 'agent_staff' ? thread.staff?.full_name || 'Staff' : 'EU-AFRIC'}</p>}
                   {m.attachment_path && (
                     <button onClick={() => openFile('message-attachments', m.attachment_path!, m.attachment_name ?? undefined).catch(() => toast('Could not open file', 'err'))}
                       className="mb-1 flex w-full items-center gap-2 rounded-lg bg-black/5 p-2 text-left hover:bg-black/10">
@@ -216,6 +272,7 @@ function Conversation({ thread, mode, uid, back, onChanged, onClose }: { thread:
                     {mine && <Ticks read={!!m.read_at} />}
                   </span>
                 </div>
+                {!mine && !!m.read_at && delBtn(m)}
               </div>
             </Fragment>
           )
@@ -252,30 +309,44 @@ function NewThread({ mode, openThreads, onClose, onCreated }: { mode: Mode; open
   const uid = session!.user.id
   const [body, setBody] = useState('')
   const [clientId, setClientId] = useState('')
+  const [to, setTo] = useState('office') // agents: 'office' | 'staff:<id>' | 'client:<id>'
   const { run, busy } = useAction()
-  const clients = useQuery(async () => ok(await supabase.from('clients').select('id, company_name, profiles(full_name)').order('created_at')) as unknown as (Client & { profiles: { full_name: string } })[], [])
+  const clients = useQuery(async () => (mode === 'agent' ? [] : ok(await supabase.from('clients').select('id, company_name, profiles(full_name)').order('created_at'))) as unknown as (Client & { profiles: { full_name: string } })[], [mode])
+  // agents choose from the office, the staff an administrator has chosen, and their own clients
+  const contacts = useQuery(async () => (mode === 'agent' ? ok(await supabase.rpc('agent_message_contacts')) : []) as unknown as { id: string; full_name: string; job_title: string | null }[], [mode])
+  const mineClients = useQuery(async () => (mode === 'agent' ? ok(await supabase.rpc('agent_client_overview')) : []) as unknown as { client_id: string; name: string; company: string | null; account_status: string }[], [mode])
   const mine = mode === 'agent' ? uid : mode === 'client' ? clients.data?.[0]?.id : clientId
   const nameOf = (c?: Client & { profiles?: { full_name: string } }) => c?.profiles?.full_name || c?.company_name || 'Client'
+  const activeClients = (mineClients.data ?? []).filter((c) => c.account_status === 'active')
 
   async function submit(e: FormEvent) {
     e.preventDefault()
     const msg = clean(body)
     if (!mine || !msg) return
     await run(async () => {
-      // one chat per client: if there is already an open one, the message goes into it
-      let id = mode === 'agent' ? openThreads[0]?.id : openThreads.find((t) => t.client_id === mine)?.id
-      if (!id) {
-        // the database needs a title for the thread; it is simply the client's name (also used in notifications)
-        if (mode === 'agent') {
+      let id: string | undefined
+      if (mode === 'agent') {
+        const [kind, ref] = to.split(':')
+        // one open chat per person: if there is already one, the message goes into it
+        id = openThreads.find((t) => (kind === 'office' ? kindOf(t) === 'office' : kind === 'staff' ? t.staff_id === ref : kindOf(t) === 'agent_client' && t.client_id === ref))?.id
+        if (!id) {
           const me = ok(await supabase.from('profiles').select('full_name').eq('id', uid).maybeSingle()) as { full_name: string } | null
-          const r = await supabase.from('message_threads').insert({ agent_id: uid, subject: (me?.full_name || 'Agent').slice(0, 160), created_by: uid }).select('id').single()
+          // the database needs a title for the thread; it is the other person's name (the office chat uses the agent's own name)
+          const row = kind === 'staff' ? { agent_id: uid, staff_id: ref, subject: contacts.data?.find((c) => c.id === ref)?.full_name }
+            : kind === 'client' ? { agent_id: uid, client_id: ref, subject: activeClients.find((c) => c.client_id === ref)?.name }
+            : { agent_id: uid, subject: me?.full_name }
+          const r = await supabase.from('message_threads').insert({ ...row, subject: (row.subject || 'Chat').slice(0, 160), created_by: uid }).select('id').single()
           if (r.error) throw r.error
           id = r.data.id as string
-        } else {
-        const title = nameOf(clients.data?.find((c) => c.id === mine)).slice(0, 160)
-        const { data, error } = await supabase.from('message_threads').insert({ client_id: mine, subject: title, created_by: uid }).select('id').single()
-        if (error) throw error
-        id = data.id as string
+        }
+      } else {
+        id = openThreads.find((t) => kindOf(t) === 'team' && t.client_id === mine)?.id
+        if (!id) {
+          // the database needs a title for the thread; it is simply the client's name (also used in notifications)
+          const title = nameOf(clients.data?.find((c) => c.id === mine)).slice(0, 160)
+          const { data, error } = await supabase.from('message_threads').insert({ client_id: mine, subject: title, created_by: uid }).select('id').single()
+          if (error) throw error
+          id = data.id as string
         }
       }
       const m = await supabase.from('messages').insert({ thread_id: id, sender_id: uid, body: msg })
@@ -289,6 +360,14 @@ function NewThread({ mode, openThreads, onClose, onCreated }: { mode: Mode; open
         {mode === 'staff' && (
           <Field label="Client"><select className="input" required value={clientId} onChange={(e) => setClientId(e.target.value)}>
             <option value="">Select a client…</option>{(clients.data ?? []).map((c) => <option key={c.id} value={c.id}>{nameOf(c)}</option>)}</select></Field>
+        )}
+        {mode === 'agent' && (
+          <Field label="Send to" hint={(contacts.data ?? []).length === 0 ? 'The EU-AFRIC team chooses which staff members you can message.' : undefined}>
+            <select className="input" value={to} onChange={(e) => setTo(e.target.value)}>
+              <option value="office">EU-AFRIC office</option>
+              {(contacts.data ?? []).length > 0 && <optgroup label="Staff">{contacts.data!.map((c) => <option key={c.id} value={'staff:' + c.id}>{c.full_name}{c.job_title ? ` · ${c.job_title}` : ''}</option>)}</optgroup>}
+              {activeClients.length > 0 && <optgroup label="My clients">{activeClients.map((c) => <option key={c.client_id} value={'client:' + c.client_id}>{c.name}{c.company ? ` · ${c.company}` : ''}</option>)}</optgroup>}
+            </select></Field>
         )}
         <Field label="Message"><textarea className="input" required autoFocus rows={4} maxLength={4000} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Type your message…" /></Field>
         <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy || !mine || !body.trim()}><Send size={15} />Send</button></div>

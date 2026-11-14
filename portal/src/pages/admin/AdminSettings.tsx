@@ -50,7 +50,7 @@ function Staff() {
   const rpc = (fn: string, args: Record<string, unknown>, msg: string) => run(async () => { ok(await supabase.rpc(fn, args)) }, msg).then(() => q.reload())
   return (<>
     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-      <p className="max-w-2xl text-xs text-gray-500"><b>Position</b> is the job title shown for the person (anything you like, for example HR Manager or Site Supervisor). <b>Access level</b> decides what they can do in the dashboard.</p>
+      <p className="max-w-2xl text-xs text-gray-500"><b>Position</b> is the job title shown for the person (anything you like, for example HR Manager or Site Supervisor). <b>Access level</b> decides what they can do in the dashboard. Tick <b>Agents can message</b> for the staff members agents are allowed to chat with; agents cannot message anyone else on the team.</p>
       <button className="btn-primary" onClick={() => setAdd(true)}><Plus size={15} />Create staff account</button></div>
     <Async q={q} empty={(d) => d.length === 0 && <EmptyState title="No staff accounts" />}>{(rows) => <Table rows={rows.map((r) => ({ ...r, id: r.id }))} cols={[
       { header: 'Name', cell: (r) => <div><p className="font-semibold">{r.full_name}</p><p className="text-xs text-gray-500">{r.email}</p></div> },
@@ -58,6 +58,9 @@ function Staff() {
         <span className={r.job_title ? '' : 'text-gray-400'}>{r.job_title || 'Add position'}</span><Pencil size={13} className="text-gray-400 group-hover:text-brand-green" /></button> },
       { header: 'Access level', cell: (r) => r.id === session!.user.id || !manage(r.role) ? <span>{ROLE_LABEL[r.role as Role]} {r.id === session!.user.id && <span className="text-xs text-gray-500">(you)</span>}</span> :
         <select className="input !w-auto !py-1 text-xs" value={r.role} onChange={async (e) => { if (await confirm({ title: `Change role to ${ROLE_LABEL[e.target.value as Role]}?`, text: r.full_name, action: 'Change role' })) rpc('set_user_role', { p_user: r.id, p_role: e.target.value }, 'Role updated') }}>{(myRole === 'super_admin' ? STAFF_ROLES : ASSIGNABLE).map((x) => <option key={x} value={x}>{ROLE_LABEL[x]}</option>)}</select> },
+      { header: 'Agents can message', cell: (r) => !manage(r.role) ? <span className="text-xs text-gray-500">{r.agent_contact ? 'Yes' : '—'}</span> :
+        <label className="flex items-center gap-2 text-xs"><input type="checkbox" className="h-4 w-4 accent-brand-green" checked={r.agent_contact} disabled={r.status !== 'active'}
+          aria-label={`Let agents message ${r.full_name}`} onChange={(e) => rpc('set_agent_contact', { p_user: r.id, p_on: e.target.checked }, e.target.checked ? 'Agents can now message this person' : 'Agents can no longer message this person')} />{r.agent_contact ? 'Yes' : 'No'}</label> },
       { header: 'Status', cell: (r) => <Badge s={r.status} /> },
       { header: '', cell: (r) => r.id !== session!.user.id && manage(r.role) && (r.status === 'active'
         ? <button className="btn-ghost !px-2 !py-1 text-xs" onClick={async () => { if (await confirm({ title: `Suspend ${r.full_name}?`, text: 'They lose access immediately.', action: 'Suspend', danger: true })) rpc('set_account_status', { p_user: r.id, p_status: 'suspended' }, 'Account suspended') }}>Suspend</button>
@@ -110,9 +113,11 @@ const MATRIX: Record<string, string[]> = {
   client: ['Own account', 'Own projects', 'Submit & view own', 'Own documents', 'Own conversations', 'Own records (read)', '—', '—', '—'],
 }
 function Roles() {
-  return (<div className="space-y-3"><p className="text-sm text-gray-600">Permissions are enforced by the database (Row Level Security), not just by what the menus show. Administrators can create and manage all staff except the Super Administrator. Only the Super Administrator can edit the website, online payments and the system and email settings.</p>
-    <div className="overflow-x-auto rounded-xl border bg-white"><table className="w-full min-w-[44rem] text-left text-xs"><thead className="bg-brand-grey uppercase text-gray-500"><tr><th className="px-3 py-2">Area</th>{Object.keys(MATRIX).map((r) => <th key={r} className="px-3 py-2">{ROLE_LABEL[r as Role]}</th>)}</tr></thead>
-      <tbody className="divide-y">{AREAS.map((a, i) => <tr key={a}><td className="px-3 py-2 font-semibold">{a}</td>{Object.values(MATRIX).map((v, j) => <td key={j} className={`px-3 py-2 ${v[i] === '—' ? 'text-gray-300' : ''}`}>{v[i]}</td>)}</tr>)}</tbody></table></div></div>)
+  const { role } = useAuth(); const sa = role === 'super_admin'
+  const cols = Object.keys(MATRIX).filter((r) => sa || r !== 'super_admin') // the Super Administrator column is not shown to anyone else
+  return (<div className="space-y-3"><p className="text-sm text-gray-600">Permissions are enforced by the database (Row Level Security), not just by what the menus show.{sa ? ' Administrators can create and manage all staff except the Super Administrator. Only the Super Administrator can edit the website, online payments and the system and email settings.' : ''}</p>
+    <div className="overflow-x-auto rounded-xl border bg-white"><table className="w-full min-w-[44rem] text-left text-xs"><thead className="bg-brand-grey uppercase text-gray-500"><tr><th className="px-3 py-2">Area</th>{cols.map((r) => <th key={r} className="px-3 py-2">{ROLE_LABEL[r as Role]}</th>)}</tr></thead>
+      <tbody className="divide-y">{AREAS.map((a, i) => <tr key={a}><td className="px-3 py-2 font-semibold">{a}</td>{cols.map((r) => { const v = MATRIX[r]; return <td key={r} className={`px-3 py-2 ${v[i] === '—' ? 'text-gray-300' : ''}`}>{v[i]}</td> })}</tr>)}</tbody></table></div></div>)
 }
 
 function Audit() {
