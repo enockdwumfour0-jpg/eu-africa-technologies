@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { Bell, ChevronDown, LogOut, Menu, User, X, type LucideIcon } from 'lucide-react'
+import { Bell, ChevronDown, LogOut, Menu, Trash2, User, X, type LucideIcon } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { supabase } from '../lib/supabase'
 import { ago, initials } from '../lib/format'
@@ -33,6 +33,10 @@ function NotificationCentre({ base }: { base: string }) {
   }, [])
   const unread = items.filter((n) => !n.read_at).length
   const markAll = async () => { await supabase.from('notifications').update({ read_at: new Date().toISOString() }).is('read_at', null); load() }
+  const readCount = items.filter((n) => n.read_at).length
+  // Only notifications you have already read can be deleted (the database enforces this too).
+  const removeOne = async (n: Notification) => { setItems((l) => l.filter((x) => x.id !== n.id)); await supabase.from('notifications').delete().eq('id', n.id).not('read_at', 'is', null); load() }
+  const clearRead = async () => { await supabase.from('notifications').delete().not('read_at', 'is', null); load() }
   const openOne = async (n: Notification) => {
     if (!n.read_at) await supabase.from('notifications').update({ read_at: new Date().toISOString() }).eq('id', n.id)
     setOpen(false); load()
@@ -48,18 +52,22 @@ function NotificationCentre({ base }: { base: string }) {
         <div className="absolute right-0 z-50 mt-2 w-[min(22rem,calc(100vw-1.5rem))] rounded-xl border border-gray-200 bg-white shadow-xl">
           <div className="flex items-center justify-between border-b px-4 py-2.5">
             <p className="text-sm font-semibold">Notifications</p>
-            {unread > 0 && <button onClick={markAll} className="text-xs font-semibold text-brand-green hover:underline">Mark all read</button>}
+            <div className="flex items-center gap-3">
+              {unread > 0 && <button onClick={markAll} className="text-xs font-semibold text-brand-green hover:underline">Mark all read</button>}
+              {readCount > 0 && <button onClick={clearRead} className="text-xs font-semibold text-gray-500 hover:text-red-600 hover:underline">Clear read</button>}
+            </div>
           </div>
           <ul className="max-h-96 divide-y divide-gray-100 overflow-y-auto">
             {items.length === 0 && <li className="px-4 py-8 text-center text-sm text-gray-500">You're all caught up.</li>}
             {items.map((n) => (
-              <li key={n.id}>
-                <button onClick={() => openOne(n)} className={`flex w-full gap-2 px-4 py-3 text-left hover:bg-gray-50 ${n.read_at ? '' : 'bg-brand-green/5'}`}>
+              <li key={n.id} className="group relative">
+                <button onClick={() => openOne(n)} className={`flex w-full gap-2 px-4 py-3 text-left hover:bg-gray-50 ${n.read_at ? 'pr-11' : 'bg-brand-green/5'}`}>
                   <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${n.read_at ? 'bg-transparent' : 'bg-brand-green'}`} />
                   <span className="min-w-0"><span className="block text-sm font-semibold text-brand-black">{n.title}</span>
                     {n.body && <span className="line-clamp-2 block text-xs text-gray-600">{n.body}</span>}
                     <span className="text-[11px] text-gray-400">{ago(n.created_at)}</span></span>
                 </button>
+                {n.read_at && <button onClick={() => removeOne(n)} className="absolute right-2 top-2.5 rounded-full p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300" aria-label={`Delete notification: ${n.title}`} title="Delete"><Trash2 size={15} /></button>}
               </li>
             ))}
           </ul>

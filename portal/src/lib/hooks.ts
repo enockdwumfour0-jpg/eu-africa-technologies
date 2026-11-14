@@ -8,7 +8,7 @@ export function useMyClient() {
   return useQuery(async () => ok(await supabase.from('clients').select('*').limit(1).maybeSingle()) as Client | null, [])
 }
 
-export type StaffMember = { id: string; full_name: string; email: string; role: string; status: string; job_title: string | null }
+export type StaffMember = { id: string; full_name: string; email: string; role: string; status: string; job_title: string | null; agent_contact: boolean }
 // All staff accounts (non-client). Staff may read these rows under RLS.
 // The Super Administrator account is not listed for anyone else.
 export function useStaff() {
@@ -19,6 +19,8 @@ export function useStaff() {
     const roles = ok(await rq) as { user_id: string; role: string }[]
     if (!roles.length) return [] as StaffMember[]
     const ps = ok(await supabase.from('profiles').select('id, full_name, email, status, job_title').in('id', roles.map((r) => r.user_id))) as { id: string; full_name: string; email: string; status: string; job_title: string | null }[]
-    return roles.map((r) => { const p = ps.find((x) => x.id === r.user_id); return { id: r.user_id, role: r.role, full_name: p?.full_name || p?.email || 'Staff', email: p?.email ?? '', status: p?.status ?? '', job_title: p?.job_title ?? null } }) as StaffMember[]
+    // staff an administrator has chosen as people agents may message
+    const contacts = new Set((ok(await supabase.from('staff_agent_contacts').select('staff_id')) as { staff_id: string }[]).map((c) => c.staff_id))
+    return roles.map((r) => { const p = ps.find((x) => x.id === r.user_id); return { id: r.user_id, role: r.role, full_name: p?.full_name || p?.email || 'Staff', email: p?.email ?? '', status: p?.status ?? '', job_title: p?.job_title ?? null, agent_contact: contacts.has(r.user_id) } }) as StaffMember[]
   }, [viewer])
 }

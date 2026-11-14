@@ -47,7 +47,7 @@ const ADMIN_NAV: (NavItem & { roles: Role[] })[] = [
   { to: '/admin/projects', label: 'Projects', icon: FolderKanban, roles: ['super_admin', 'admin', 'project_manager', 'support_officer', 'accountant'] },
   { to: '/admin/requests', label: 'Requests', icon: Inbox, roles: ['super_admin', 'admin', 'support_officer'] },
   { to: '/admin/documents', label: 'Documents', icon: FileText, roles: ['super_admin', 'admin', 'project_manager', 'support_officer'] },
-  { to: '/admin/messages', label: 'Messages', icon: MessageSquare, roles: ['super_admin', 'admin', 'project_manager', 'support_officer'] },
+  { to: '/admin/messages', label: 'Messages', icon: MessageSquare, roles: ['super_admin', 'admin', 'project_manager', 'accountant', 'support_officer'] },
   { to: '/admin/finance', label: 'Finance', icon: Banknote, roles: ['super_admin', 'admin', 'accountant'] },
   { to: '/admin/reports', label: 'Reports', icon: BarChart3, roles: ALL },
   { to: '/admin/website', label: 'Website', icon: Globe, roles: ['super_admin', 'admin'] },
@@ -86,7 +86,7 @@ export default function App() {
           <Route path="projects" element={<ClientProjects />} />
           <Route path="projects/:id" element={<ProjectDetail />} />
           <Route path="documents" element={<ClientDocuments />} />
-          <Route path="messages" element={<><PageHeader title="Messages" sub="Chat with the EU-AFRIC team about your projects." /><MessagesView mode="client" /></>} />
+          <Route path="messages" element={<><PageHeader title="Messages" sub="Chat with the EU-AFRIC team and your agent." /><MessagesView mode="client" /></>} />
           <Route path="payments" element={<ClientPayments />} />
           <Route path="profile" element={<ClientProfile />} />
         </Route>

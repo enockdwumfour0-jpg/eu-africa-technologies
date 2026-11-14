@@ -208,7 +208,7 @@ export function AgentProfile() {
 }
 
 export function AgentMessages() {
-  return (<><PageHeader title="Messages" sub="Chat with the EU-AFRIC office." /><MessagesView mode="agent" /></>)
+  return (<><PageHeader title="Messages" sub="Chat with the EU-AFRIC office, the staff you are allowed to message, and your clients." /><MessagesView mode="agent" /></>)
 }
 
 type Res = { id: string; title: string; description: string | null; category: string | null; storage_path: string; file_name: string; size_bytes: number; created_at: string }
