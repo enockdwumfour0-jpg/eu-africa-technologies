@@ -8,14 +8,16 @@ import { Field } from '../../components/ui'
 import { PWNED_MESSAGE, isPwned, passwordIssue, strength } from './password'
 
 export default function Register() {
-  const [f, setF] = useState({ full_name: '', email: '', phone: '', company: '', address: '', notes: '', password: '', confirm: '', website: '' })
+  const [f, setF] = useState({ full_name: '', email: '', phone: '', company: '', address: '', notes: '', password: '', confirm: '', website: '', code: '' })
   const [params] = useSearchParams()
-  const ref = (params.get('ref') ?? '').replace(/[^A-Za-z0-9]/g, '').slice(0, 12).toUpperCase()
+  const tidy = (v: string) => v.replace(/[^A-Za-z0-9]/g, '').slice(0, 12).toUpperCase()
+  const linkRef = tidy(params.get('ref') ?? '')
   const [agree, setAgree] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [done, setDone] = useState(false)
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value })
+  const ref = linkRef || tidy(f.code) // the link wins; otherwise the code typed by the client
   const s = strength(f.password)
 
   async function submit(e: FormEvent) {
@@ -64,6 +66,7 @@ export default function Register() {
           <Field label="Company (optional)"><input className="input" autoComplete="organization" maxLength={160} value={f.company} onChange={set('company')} /></Field>
           <Field label="Address (optional)"><input className="input" autoComplete="street-address" maxLength={300} value={f.address} onChange={set('address')} /></Field>
         </div>
+        <Field label="Agent referral code (optional)" hint={linkRef ? 'Applied from your referral link.' : 'If an agent gave you a code, enter it here.'}><input className="input uppercase" maxLength={12} autoComplete="off" readOnly={!!linkRef} value={linkRef || f.code} onChange={set('code')} /></Field>
         <Field label="What do you need from us? (optional)"><textarea className="input" rows={2} maxLength={1000} value={f.notes} onChange={set('notes')} /></Field>
         <Field label="Password *" hint="At least 10 characters, with letters and numbers.">
           <input className="input" type="password" autoComplete="new-password" required value={f.password} onChange={set('password')} />
