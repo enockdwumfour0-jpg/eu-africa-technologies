@@ -63,7 +63,7 @@ Deno.serve(async (req) => {
   const first = String(profile.full_name || "").split(" ")[0];
   const html = `<div style="font-family:Arial,Helvetica,sans-serif;color:#151515;max-width:560px">
 <h2 style="color:#168447;margin:0 0 4px">${esc(company)}</h2>
-<p style="margin:0 0 18px;color:#667">Client portal notification</p>
+<p style="margin:0 0 18px;color:#667">Portal notification</p>
 <p>Hello${first ? " " + esc(first) : ""},</p>
 <p style="font-size:16px"><b>${esc(n.title)}</b></p>
 ${n.body ? `<p style="white-space:pre-wrap">${esc(n.body)}</p>` : ""}
