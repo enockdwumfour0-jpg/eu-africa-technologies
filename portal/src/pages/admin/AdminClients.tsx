@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Check, Pause, Play, X } from 'lucide-react'
+import { ArrowLeft, Check, Pause, Play, Trash2, X } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { Async, Badge, Field, Modal, PageHeader, SearchBox, Select, Table, Tabs, matches, ok, useAction, useFeedback, useQuery } from '../../components/ui'
 import { date, dateTime, ghs } from '../../lib/format'
 import { useAuth } from '../../auth/AuthContext'
+import { deleteAccount } from '../../lib/deleteAccount'
 import MessagesView from '../../components/Messages'
 import type { Client, Invoice, Payment, Project } from '../../lib/types'
 
@@ -17,6 +18,7 @@ function useReview(reload: () => void) {
     rejecting, setRejecting,
     approve: async (r: Row) => { if (await confirm({ title: `Approve ${r.profiles.full_name}?`, text: 'They will be able to sign in and use the client portal.', action: 'Approve' })) { await run(async () => { ok(await supabase.rpc('review_client_application', { p_user: r.profile_id, p_decision: 'approved' })) }, 'Client approved'); reload() } },
     setStatus: async (r: Row, s: 'active' | 'suspended') => { if (await confirm({ title: `${s === 'active' ? 'Activate' : 'Suspend'} ${r.profiles.full_name}?`, text: s === 'suspended' ? 'They will lose access immediately.' : undefined, action: s === 'active' ? 'Activate' : 'Suspend', danger: s === 'suspended' })) { await run(async () => { ok(await supabase.rpc('set_account_status', { p_user: r.profile_id, p_status: s })) }, 'Account updated'); reload() } },
+    remove: async (r: Row, then?: () => void) => { if (await confirm({ title: `Delete ${r.profiles.full_name || r.profiles.email}?`, text: 'Their personal details are erased and they can no longer sign in. Invoices and payments are kept for accounting, without their name. This cannot be undone.', action: 'Delete account', danger: true })) { const d = await run(async () => { await deleteAccount(r.profile_id) }, 'Account deleted'); if (d) { reload(); then?.() } } },
     reject: async (r: Row, note: string) => { const d = await run(async () => { ok(await supabase.rpc('review_client_application', { p_user: r.profile_id, p_decision: 'rejected', p_note: note || null })) }, 'Registration rejected'); if (d) { setRejecting(null); reload() } },
   }
 }
@@ -26,18 +28,19 @@ function RejectModal({ r, onClose, onSubmit }: { r: Row; onClose: () => void; on
     <Field label="Reason (shown to the applicant)"><textarea className="input" rows={3} maxLength={500} value={n} onChange={(e) => setN(e.target.value)} /></Field>
     <div className="mt-4 flex justify-end gap-2"><button className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-danger" onClick={() => onSubmit(n.trim())}>Reject</button></div></Modal>
 }
-const Actions = ({ r, rv }: { r: Row; rv: ReturnType<typeof useReview> }) => (
+const Actions = ({ r, rv, then }: { r: Row; rv: ReturnType<typeof useReview>; then?: () => void }) => (
   <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
     {(r.profiles.status === 'pending' || r.profiles.status === 'rejected') && <button className="btn-primary !px-2 !py-1 text-xs" onClick={() => rv.approve(r)}><Check size={13} />Approve</button>}
     {r.profiles.status === 'pending' && <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => rv.setRejecting(r)}><X size={13} />Reject</button>}
     {r.profiles.status === 'active' && <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => rv.setStatus(r, 'suspended')}><Pause size={13} />Suspend</button>}
     {r.profiles.status === 'suspended' && <button className="btn-primary !px-2 !py-1 text-xs" onClick={() => rv.setStatus(r, 'active')}><Play size={13} />Activate</button>}
+    <button className="btn-ghost !px-2 !py-1 text-xs text-red-600" title="Delete account" onClick={() => rv.remove(r, then)}><Trash2 size={13} /></button>
   </div>
 )
 
 export default function AdminClients() {
   const nav = useNavigate()
-  const q = useQuery(async () => ok(await supabase.from('clients').select('*, profiles!inner(id, full_name, email, phone, status, rejection_reason, created_at)').order('created_at', { ascending: false })) as unknown as Row[], [])
+  const q = useQuery(async () => ok(await supabase.from('clients').select('*, profiles!inner(id, full_name, email, phone, status, rejection_reason, created_at)').is('profiles.deleted_at', null).order('created_at', { ascending: false })) as unknown as Row[], [])
   const rv = useReview(q.reload)
   const [s, setS] = useState(''); const [st, setSt] = useState('all')
   return (
@@ -69,6 +72,7 @@ export function ClientDetail() {
     return { c: ok(c) as unknown as Row | null, projects: ok(p) as Project[], inv: ok(i) as Invoice[], pay: ok(pay) as unknown as Payment[], agents: (ag.error ? [] : ag.data) as unknown as { user_id: string; code: string; profiles: { full_name: string } | null }[] }
   }, [id])
   const rv = useReview(q.reload)
+  const nav = useNavigate()
   const { role } = useAuth(); const { run } = useAction()
   const canAssign = role === 'super_admin' || role === 'admin'
   return (
@@ -76,7 +80,7 @@ export function ClientDetail() {
       <Link to="/admin/clients" className="mb-3 inline-flex items-center gap-1 text-sm font-semibold text-brand-green"><ArrowLeft size={14} />All clients</Link>
       <Async q={q}>{({ c, projects, inv, pay, agents }) => !c ? <p>Client not found.</p> : (
         <>
-          <PageHeader title={c.profiles.full_name || c.profiles.email} sub={c.company_name ?? undefined} actions={<Actions r={c} rv={rv} />} />
+          <PageHeader title={c.profiles.full_name || c.profiles.email} sub={c.company_name ?? undefined} actions={<Actions r={c} rv={rv} then={() => nav('/admin/clients')} />} />
           <Tabs value={tab} onChange={setTab} tabs={[{ id: 'overview', label: 'Profile' }, { id: 'projects', label: 'Projects', count: projects.length }, { id: 'payments', label: 'Payments', count: pay.length }, { id: 'messages', label: 'Messages' }]} />
           {tab === 'overview' && <div className="card grid gap-4 text-sm sm:grid-cols-2">
             {([['Email', c.profiles.email], ['Phone', c.profiles.phone || '—'], ['Company', c.company_name || '—'], ['Address', c.address || '—'], ['Registered', dateTime(c.profiles.created_at)]] as [string, string][]).map(([k, v]) => <div key={k}><p className="text-xs font-semibold uppercase text-gray-500">{k}</p><p>{v}</p></div>)}

@@ -5,6 +5,7 @@ import { Async, Badge, Field, PageHeader, ok, useAction, useFeedback, useQuery }
 import { checkFile, signedUrl } from '../../lib/files'
 import { clean, initials } from '../../lib/format'
 import { useAuth } from '../../auth/AuthContext'
+import { deleteAccount } from '../../lib/deleteAccount'
 import { PWNED_MESSAGE, isPwned, passwordIssue } from '../auth/password'
 import type { Client, Profile } from '../../lib/types'
 
@@ -26,6 +27,9 @@ function Forms({ p, c, reload }: { p: Profile; c: Client | null; reload: () => v
   const [prefs, setPrefs] = useState(p.notification_prefs)
   const [pw, setPw] = useState({ a: '', b: '' })
   const [avatar, setAvatar] = useState<string | null>(null)
+  const [delText, setDelText] = useState('')
+  const { signOut } = useAuth()
+  const removeAccount = () => run(async () => { await deleteAccount(); await signOut() }, 'Your account has been deleted')
   useEffect(() => { if (p.avatar_path) signedUrl('avatars', p.avatar_path).then(setAvatar).catch(() => {}) }, [p.avatar_path])
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value })
 
@@ -70,6 +74,10 @@ function Forms({ p, c, reload }: { p: Profile; c: Client | null; reload: () => v
           <Field label="New password" hint="At least 10 characters, with letters and numbers."><input className="input" type="password" autoComplete="new-password" value={pw.a} onChange={(e) => setPw({ ...pw, a: e.target.value })} /></Field>
           <Field label="Confirm new password"><input className="input" type="password" autoComplete="new-password" value={pw.b} onChange={(e) => setPw({ ...pw, b: e.target.value })} /></Field>
           <button className="btn-ghost" disabled={busy || !pw.a}>Update password</button></form>
+        <section className="card space-y-3 border-red-200"><h2 className="font-semibold text-red-700">Delete my account</h2>
+          <p className="text-sm text-gray-600">This permanently erases your personal details and signs you out for good. Invoices and payment records are kept for accounting, without your name. This cannot be undone. If you have unpaid invoices you must settle them first.</p>
+          <Field label="Type DELETE to confirm"><input className="input" value={delText} onChange={(e) => setDelText(e.target.value)} autoComplete="off" /></Field>
+          <button type="button" className="btn-danger" disabled={busy || delText !== 'DELETE'} onClick={removeAccount}>Delete my account</button></section>
       </div>
     </div>
   )

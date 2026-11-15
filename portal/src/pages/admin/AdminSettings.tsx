@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
-import { Pencil, Plus } from 'lucide-react'
+import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
+import { deleteAccount } from '../../lib/deleteAccount'
 import { useAuth } from '../../auth/AuthContext'
 import { Async, Badge, EmptyState, Field, Modal, PageHeader, Select, Table, Tabs, ok, useAction, useFeedback, useQuery } from '../../components/ui'
 import { clean, dateTime, label, num } from '../../lib/format'
@@ -65,6 +66,7 @@ function Staff() {
       { header: '', cell: (r) => r.id !== session!.user.id && manage(r.role) && (r.status === 'active'
         ? <button className="btn-ghost !px-2 !py-1 text-xs" onClick={async () => { if (await confirm({ title: `Suspend ${r.full_name}?`, text: 'They lose access immediately.', action: 'Suspend', danger: true })) rpc('set_account_status', { p_user: r.id, p_status: 'suspended' }, 'Account suspended') }}>Suspend</button>
         : <button className="btn-primary !px-2 !py-1 text-xs" onClick={() => rpc('set_account_status', { p_user: r.id, p_status: 'active' }, 'Account activated')}>Activate</button>) },
+      { header: '', cell: (r) => r.id !== session!.user.id && manage(r.role) && (myRole === 'super_admin' || r.role !== 'admin') && r.role !== 'super_admin' && <button className="btn-ghost !p-1.5 text-red-600" title="Delete account" aria-label={`Delete ${r.full_name}`} onClick={async () => { if (await confirm({ title: `Delete ${r.full_name}?`, text: 'Their personal details are erased and they can no longer sign in. Anything they created is kept without their name. This cannot be undone.', action: 'Delete account', danger: true })) { const d = await run(async () => { await deleteAccount(r.id) }, 'Account deleted'); if (d) q.reload() } }}><Trash2 size={14} /></button> },
     ]} />}</Async>
     {add && <NewStaff onClose={() => setAdd(false)} onDone={() => { setAdd(false); q.reload() }} />}
     {editTitle && <EditTitle s={editTitle} onClose={() => setEditTitle(null)} onDone={() => { setEditTitle(null); q.reload() }} />}
