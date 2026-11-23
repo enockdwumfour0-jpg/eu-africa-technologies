@@ -17,6 +17,31 @@ const cors = (req: Request) => ({
 const reply = (req: Request, o: unknown, status = 200) =>
   new Response(JSON.stringify(o), { status, headers: { ...cors(req), "Content-Type": "application/json" } });
 
+// Welcome email with a set-password link (our own wording, so it never says "client portal").
+// deno-lint-ignore no-explicit-any
+async function sendWelcome(sb: any, email: string, name: string, what: string): Promise<boolean> {
+  const key = Deno.env.get("RESEND_API_KEY");
+  if (!key) return false;
+  const { data, error } = await sb.auth.admin.generateLink({ type: "recovery", email, options: { redirectTo: "https://eatl.co.com/reset-password" } });
+  const link = data?.properties?.action_link;
+  if (error || !link) return false;
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+  const first = esc(name.split(" ")[0] || "");
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;color:#151515;max-width:560px">
+<h2 style="color:#168447;margin:0 0 4px">EU-AFRIC Technologies Ltd</h2>
+<p style="margin:0 0 18px;color:#667">Welcome to the team</p>
+<p>Hello${first ? " " + first : ""},</p>
+<p>An account has been created for you as ${esc(what)} at EU-AFRIC Technologies Ltd.</p>
+<p style="margin:22px 0"><a href="${esc(link)}" style="background:#168447;color:#fff;padding:11px 18px;border-radius:6px;text-decoration:none;font-weight:bold">Set your password</a></p>
+<p style="color:#667;font-size:12px">After setting your password, sign in at https://eatl.co.com/login. If you were not expecting this, you can ignore this email.</p></div>`;
+  const r = await fetch("https://api.resend.com/emails", {
+    method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ from: Deno.env.get("ALERT_FROM") || "EU-AFRIC Technologies <alerts@alerts.eatl.co.com>", to: [email],
+      subject: "Your EU-AFRIC Technologies account", html, text: `An account was created for you as ${what}. Set your password: ${link}` }),
+  });
+  return r.ok;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors(req) });
   if (req.method !== "POST") return reply(req, { error: "Method not allowed" }, 405);
@@ -65,7 +90,11 @@ Deno.serve(async (req) => {
   if (job_title) await sb.from("profiles").update({ job_title }).eq("id", created.user.id);
 
   // 4. Let them choose their own password.
-  const anon = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, { auth: { persistSession: false } });
-  const { error: re } = await anon.auth.resetPasswordForEmail(email, { redirectTo: "https://eatl.co.com/reset-password" });
+  let sent = await sendWelcome(sb, email, full_name, "a member of staff");
+  if (!sent) { // fall back to the standard reset email
+    const anon = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, { auth: { persistSession: false } });
+    sent = !(await anon.auth.resetPasswordForEmail(email, { redirectTo: "https://eatl.co.com/reset-password" })).error;
+  }
+  const re = sent ? null : true;
   return reply(req, { ok: true, user_id: created.user.id, email_sent: !re });
 });

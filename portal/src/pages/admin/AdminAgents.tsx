@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Copy, Download, Eye, EyeOff, Plus, Trash2, Upload } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
+import { deleteAccount } from '../../lib/deleteAccount'
 import { useAuth } from '../../auth/AuthContext'
 import { Async, Badge, EmptyState, Field, Modal, PageHeader, SearchBox, StatCard, Table, Tabs, matches, ok, useAction, useFeedback, useQuery } from '../../components/ui'
 import { ACCEPT, checkFile, openFile, upload } from '../../lib/files'
@@ -23,7 +24,7 @@ const useCanEdit = () => { const { role } = useAuth(); return role === 'super_ad
 export default function AdminAgents() {
   const nav = useNavigate(); const canEdit = useCanEdit(); const [s, setS] = useState(''); const [add, setAdd] = useState(false); const [tab, setTab] = useState('agents')
   const q = useQuery(async () => {
-    const [a, e, p, c] = await Promise.all([supabase.from('agents').select('*, profiles(full_name, email, phone)').order('created_at', { ascending: false }),
+    const [a, e, p, c] = await Promise.all([supabase.from('agents').select('*, profiles!inner(full_name, email, phone)').is('profiles.deleted_at', null).order('created_at', { ascending: false }),
       supabase.from('commission_entries').select('*'), supabase.from('commission_payouts').select('*'), supabase.from('clients').select('id, agent_id').not('agent_id', 'is', null)])
     return { a: ok(a) as unknown as AgentRow[], e: ok(e) as Entry[], p: ok(p) as Payout[], c: ok(c) as { id: string; agent_id: string }[] } }, [])
   return (<>
@@ -57,7 +58,7 @@ function NewAgent({ onClose, onDone }: { onClose: () => void; onDone: () => void
 }
 
 export function AgentDetail() {
-  const { id } = useParams(); const canEdit = useCanEdit(); const [tab, setTab] = useState('statement'); const { run } = useAction(); const { confirm, toast } = useFeedback()
+  const nav = useNavigate(); const { id } = useParams(); const canEdit = useCanEdit(); const [tab, setTab] = useState('statement'); const { run } = useAction(); const { confirm, toast } = useFeedback()
   const [pay, setPay] = useState(false); const [edit, setEdit] = useState(false)
   const q = useQuery(async () => {
     const [a, r, e, p, c] = await Promise.all([supabase.from('agents').select('*, profiles(full_name, email, phone)').eq('user_id', id!).maybeSingle(), supabase.from('agent_rates').select('*').eq('agent_id', id!).order('product'),
@@ -73,6 +74,7 @@ export function AgentDetail() {
         <PageHeader title={a.profiles?.full_name || 'Agent'} sub={`${typeLabel(a.agent_type)}${a.agency ? ' · ' + a.agency : ''} · code ${a.code}`} actions={<div className="flex gap-2">
           {canEdit && <button className="btn-ghost" onClick={() => setEdit(true)}>Edit</button>}
           {canEdit && (a.status === 'active' ? <button className="btn-ghost" onClick={async () => { if (await confirm({ title: 'Suspend this agent?', text: 'They lose dashboard access. Commission already earned is kept.', action: 'Suspend', danger: true })) upd({ status: 'suspended' }, 'Agent suspended') }}>Suspend</button> : <button className="btn-primary" onClick={() => upd({ status: 'active' }, 'Agent activated')}>Activate</button>)}
+          {canEdit && <button className="btn-ghost text-red-600" title="Delete agent" onClick={async () => { if (await confirm({ title: `Delete ${a.profiles?.full_name || 'this agent'}?`, text: (b.owed > 0 ? `They are still owed ${ghs(b.owed)} in commission; settle it first if needed. ` : '') + 'Their personal details are erased and they can no longer sign in. Commission records are kept without their name. Their clients stay with EU-AFRIC. This cannot be undone.', action: 'Delete agent', danger: true })) { const d = await run(async () => { await deleteAccount(a.user_id) }, 'Agent deleted'); if (d) nav('/admin/agents') } }}><Trash2 size={15} />Delete</button>}
           <button className="btn-primary" disabled={b.owed <= 0} onClick={() => setPay(true)}>Record payout</button></div>} />
         <div className="mb-4 grid gap-3 sm:grid-cols-4"><StatCard label="Earned" value={ghs(b.earned)} tone="grey" /><StatCard label="Paid" value={ghs(b.paid)} /><StatCard label="Owed" value={ghs(b.owed)} tone="gold" /><StatCard label="Standard rate" value={a.default_rate + '%'} tone="grey" /></div>
         <p className="mb-3 text-sm text-gray-600">{a.profiles?.email}{a.profiles?.phone ? ` · ${a.profiles.phone}` : ''} · <Badge s={a.status} /> · Payout details: {a.payout_details || 'not provided yet'}</p>
